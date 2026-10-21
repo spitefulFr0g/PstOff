@@ -1,0 +1,7 @@
+# Real mailbox files hold private mail and must never be committed.
+*.ost
+*.pst
+testdata/private/
+
+# Rust build output
+/target/
