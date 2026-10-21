@@ -20,16 +20,16 @@ No library reviewed here appears to provide the whole Conversion as a ready-to-u
 - pst-extractor (MIT)
 - XstReader (MS-PL)
 
-Microsoft's own Rust crate, outlook-pst (MIT), is the most mature Rust PST code, but it rejects every OST.
+Microsoft's Rust crate, outlook-pst (MIT), is a candidate for PST infrastructure, but the reviewed revision rejects OST input.
 
-**Writers.** No general-purpose PST writer exists:
+**Writers.** The reviewed candidates do not establish a validated, general-purpose writer for PstOff's full item-preservation requirements:
 
 - outlook-pst-rw (MIT) writes only email-shaped messages from a fixed set of fields.
-- mbox2pst (BSD-2-Clause) writes structurally careful PSTs but has never been opened in Outlook.
+- mbox2pst (BSD-2-Clause) writes PSTs; the reviewed project material does not establish Outlook validation.
 - pstsdk's write API sits on an unreleased 2010-era branch.
 - Aspose.Email (commercial) states that its one-call OST-to-PST conversion does not handle 2013+ OSTs.
 
-**What this means for PstOff.** PstOff will need its own 4 KB-OST reader and PST writer. The best foundations:
+**What this means for PstOff.** The build-or-borrow decision must account for additional 4 KB-OST reading and PST writing work, whether implemented directly or adapted from existing code. Candidate foundations:
 
 - outlook-pst's NDB and LTP code, as a crate dependency or a fork.
 - pstfree and mbox2pst as MIT- and BSD-licensed code to port from.
