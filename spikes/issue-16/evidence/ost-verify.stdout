@@ -1,0 +1,13 @@
+Reading every block to check it against its own checksum...
+
+  308 nodes and 310 blocks reachable from the header's index
+  310 blocks read, 0 unreadable, 0 failed their checksum
+  4105 pages swept, 17 of them index pages (9 node, 8 block)
+  1031 superseded entries ignored — older copies of things that later moved
+  442 blocks can be carved out of the file with no index at all
+  80 folder tables cross-checked against the node parents, 0 disagreed
+
+  Sweeping recovers 6 node(s) the index cannot reach — 6 message(s), 0 folder(s).
+  Run any command with --salvage to use them.
+
+  No damage found.

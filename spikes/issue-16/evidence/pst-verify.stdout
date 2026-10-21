@@ -1,0 +1,12 @@
+Reading every block to check it against its own checksum...
+
+  308 nodes and 518 blocks reachable from the header's index
+  518 blocks read, 0 unreadable, 0 failed their checksum
+  442 pages swept, 47 of them index pages (21 node, 26 block)
+  519 blocks can be carved out of the file with no index at all
+  80 folder tables cross-checked against the node parents, 0 disagreed
+
+  Sweeping finds nothing the index has lost. The two agree.
+
+  1 problem(s):
+    - allocation map is marked invalid — the file was not closed cleanly

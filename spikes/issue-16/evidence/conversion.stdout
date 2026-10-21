@@ -1,0 +1,8 @@
+Wrote /output/example-2013-pstfree.pst: 308 node(s), 518 block(s), 226816 bytes.
+  Converted from an Outlook 2013 OST. Every data stream was decoded and laid out again as a
+  Unicode PST stores them, so this is a new file rather than a copy of the old
+  one — check it against the original before deleting anything.
+  The allocation maps are marked invalid, which is the documented way to say
+  'rebuild these before writing'. Outlook reports such a file as not closed
+  properly: run SCANPST over it first, which takes seconds. Reading the
+  new file back here will report that one thing, and it is meant to.
