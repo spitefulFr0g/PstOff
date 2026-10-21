@@ -1,0 +1,77 @@
+{
+  "controls_and_candidate": [
+    {
+      "Alias": "control-empty",
+      "ScanFinished": true,
+      "ScanExitCode": 1,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": true,
+      "DiagnosticLineCount": 0,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient"
+    },
+    {
+      "Alias": "control-invalid",
+      "ScanFinished": true,
+      "ScanExitCode": 0,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": false,
+      "DiagnosticLineCount": 1,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient"
+    },
+    {
+      "Alias": "candidate-version36",
+      "ScanFinished": true,
+      "ScanExitCode": 1,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": true,
+      "DiagnosticLineCount": 2324,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient"
+    },
+    {
+      "Alias": "hybrid-map-rebuild",
+      "ScanFinished": true,
+      "ScanExitCode": 1,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": true,
+      "DiagnosticLineCount": 326,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient"
+    }
+  ],
+  "outlook_candidate_check": "not performed; no claim of acceptance",
+  "outlook_control_check": "COM activation was intermittent and repeated control timed out; not used to infer candidate failure",
+  "semantic_comparison": "candidate self-comparison only; full independent property equivalence is unproven",
+  "candidate_integrity_result": "FAIL: scan-only log records PMap/AMap PTYPE and BID mismatches, invalid BBT/NBT pages, and unallocated nodes",
+  "repair_performed": false,
+  "private_input_used": false,
+  "map_rebuild_experiment": {
+    "api": "UnicodePstFile::open + PstFile::lock + PstFileLockGuard::flush",
+    "amap_before": "Invalid",
+    "amap_after": "Valid2",
+    "baseline_input_unchanged": true,
+    "scan_diagnostic_lines_before": 2324,
+    "scan_diagnostic_lines_after": 326,
+    "conclusion": "Existing Microsoft map regeneration reduces faults but does not meet the scan-only zero-error gate."
+  },
+  "map_rebuild_reader_checks": {
+    "ms-probe": {
+      "exit": 0,
+      "stdout_sha256": "1673f76efe9f1546cfc96e834cb62c2b3f950717f6424d9c42ed32ef55f27e06",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "version=Unicode amap_valid=Valid2\nstore_property_count=25\nroot_rows=2 decoded_root_values=16\nipm_key_matches=true\nipm_opened=true hierarchy_present=true\n"
+    },
+    "pc-probe": {
+      "exit": 0,
+      "stdout_sha256": "efa0b5b6bc9efea5974fc89f64c586a5ac549d8c31922a81291de9bc9e108218",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "same_candidate_property_dump_unchanged": true
+  }
+}

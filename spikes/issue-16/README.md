@@ -46,7 +46,7 @@ The runner accepts no arbitrary input, checks candidate revisions/source diffs a
 
 - Source: version 36, 308 indexed nodes, 310 blocks, 40 ordinary folders, 6 search folders, 3 ordinary messages, 14 associated messages. All 310 indexed blocks readable, zero checksum failures. 80 folder-table/parent checks agree.
 - Conversion: exit 0, 308 nodes and 518 blocks, no dropped-node warning. Output: version 23, PST magic, plain block encoding, 226,816 bytes. All 518 indexed blocks read back with zero checksum failures; 80 folder-parent checks agree.
-- Allocation maps: pstfree reports invalid maps; Microsoft independently reports `amap_valid=Invalid`. `convert.rs:616` explicitly sets `header[248] = 0`; CLI says run SCANPST first. This is an acceptance gap. Actual scan-only SCANPST behavior remains for parent validation.
+- Allocation maps: pstfree reports invalid maps; Microsoft independently reports `amap_valid=Invalid`. `convert.rs:616` explicitly sets `header[248] = 0`; CLI says run SCANPST first. This is an acceptance gap. The subsequent parent Windows checks below establish scan-only failure.
 - Microsoft result read: exit 0, 25 store properties, 2 root hierarchy rows, 16 decoded root values, matching store/IPM record keys; IPM folder opens with hierarchy table. Partial structural interoperability only.
 - Microsoft public control: exit 0, valid maps, 13 store properties, 4 root rows, 24 decoded values, IPM folder opens.
 - Microsoft source read: exit 1, `InvalidNdbHeaderMagicClientValue(20307)` (OST client magic). Unchanged public open API cannot provide source semantic comparison.
@@ -58,7 +58,7 @@ The runner accepts no arbitrary input, checks candidate revisions/source diffs a
 
 ## Unperformed / unknown
 
-Scan-only SCANPST, Outlook open, Windows count/property checks and full independent item validation were not run here; parent owns Windows validation. libpff/pypff was not installed. No complete attachment/embedded-message byte comparison, recursive subnode inventory, named-property identity comparison, all-type raw-property audit, large-heap stress fixture or broad corpus was attempted. Same-candidate comparisons share parser blind spots and compare decoded debug representations, not all raw serialized tags/types. Unknown stays unknown; this result is not Faithful.
+The initial subagent stage did not run Windows checks. The parent subsequently ran scan-only SCANPST as recorded below. Candidate Outlook acceptance, Windows item/property checks, and full independent item validation remain unperformed. libpff/pypff was not installed. No complete attachment/embedded-message byte comparison, recursive subnode inventory, named-property identity comparison, all-type raw-property audit, large-heap stress fixture or broad corpus was attempted. Same-candidate comparisons share parser blind spots and compare decoded debug representations, not all raw serialized tags/types. Unknown stays unknown; this result is not Faithful.
 
 ## Parent handoff
 
@@ -75,3 +75,19 @@ Binary SHA256 values:
 - pc-probe: `bb6cd50262d61ba7ef86471b52d3893e5d7a390db9a3c5c7c08cd9cd188e63aa`
 
 For #10, this supports investigating hybrid Rust: pstfree demonstrates modern OST reading and a limited conventional-PST baseline; Microsoft supplies an independent result check. It does not justify adopting the writer unchanged. Valid allocation maps, heap/reference reconstruction and explicit store-identity/preservation rules remain writer work. Stop here rather than implementing those subsystems. Parent retains issue updates/closure; no PR.
+
+## Parent Windows and hybrid-map follow-up
+
+Parent checks used the installed SCANPST build 16.0.20527.20088. The separate-copy validator is `validate-public-windows.ps1`; summarized results are in `evidence/windows-results.json`. Raw logs stay in the Windows temporary `PstOffPublicSpike` directory and contain public-fixture diagnostics only. Each scan used `-silent -no repair -log replace`; hashes confirmed the scan inputs unchanged.
+
+Controls establish why exit codes alone are insufficient: the Microsoft Empty.pst fixture completed with exit 1, a finished-scan marker and no matched diagnostic lines. A deliberately invalid 1,024-byte zero-filled file returned exit 0, one diagnostic line and no finished-scan marker. The decoder handles both UTF-16 normal logs and ASCII/UTF-8 rejection logs. Diagnostic-line counts include repeated findings; they are not distinct defect counts or a generic pass/fail parser.
+
+The unchanged pstfree output completed scan-only with **2,324 diagnostic lines**, including PMap/AMap PTYPE and BID mismatches, invalid BBT/NBT pages, and unallocated nodes. This independently confirms that the baseline does not meet the no-repair acceptance gate.
+
+A narrowly scoped composition experiment then copied that public output and used Microsoft's existing `UnicodePstFile::open`, `PstFile::lock` and `PstFileLockGuard::flush` primitives to regenerate allocation metadata. It did not implement a new PST writer. `probe/src/bin/map-spike.rs` accepts no arbitrary input paths: it uses sandbox-mounted `/input/baseline.pst` and `/output/hybrid-map-rebuild.pst`. The network-isolated command and stdout are in `evidence/map-spike-results.json`; original baseline bytes remained unchanged. The header changed from `Invalid` allocation maps to `Valid2`.
+
+That composed output still produces **326 diagnostic lines** in scan-only SCANPST, including `rgbFP` problems and missing required table columns such as `0E300102`, `0E330014`, `0E340102`, `0E3D0102`, `0E3C0102`, and `0E380003`. Regenerating maps helps, but does not establish PST schema correctness. Microsoft independently opens this map-rebuilt output. The candidate's property-dump hash is unchanged by map regeneration; that is a limited same-parser check, not full independent property equivalence.
+
+Reproduce the narrow map experiment by building `--bin map-spike` with the same offline manifest/target directory above and running the recorded bubblewrap command. Reproduce Windows checks by passing the generated public PST's Windows-visible path and an alphanumeric alias to the PowerShell validator. The default performs scan-only checks; `-CheckOutlook` is optional. Outlook COM acquisition was intermittent, including a repeated 45-second-bounded control timeout; candidate Outlook acceptance was not asserted or inferred from this.
+
+**Verdict:** the hybrid direction has concrete reuse evidence, but the zero-error writer gate remains blocked by allocation/header and table-schema work, with large-heap handling and full semantic preservation also unproven. Keep the dependency/fork decision provisional. No SCANPST repair was run and no private OST was accessed. Extending this into a complete writer is outside this bounded baseline spike.
