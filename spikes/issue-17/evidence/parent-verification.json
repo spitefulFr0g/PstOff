@@ -1,0 +1,12 @@
+{
+  "legacy_gate_diagnostic_lines": 34,
+  "strict_gate_diagnostic_lines": 51,
+  "affected_messages": 17,
+  "strict_gate": "FAIL",
+  "strict_valid_control": "PASS",
+  "strict_invalid_control": "FAIL",
+  "source_and_scan_inputs_unchanged": true,
+  "timestamp_promotion_applied": false,
+  "compatibility_evidence": "Microsoft MFCMAPI defines 0x0E300102; spec-template discrepancy remains bounded to target compatibility",
+  "independent_property_comparison": "libpff-comparison.json"
+}

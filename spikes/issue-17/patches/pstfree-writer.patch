@@ -1,0 +1,208 @@
+--- a/src/convert.rs
++++ b/src/convert.rs
+@@ -176,7 +176,21 @@
+             return Ok(0);
+         }
+         let mut parts: Vec<(u64, u64)> = Vec::new(); // (bid, bytes it holds)
+-        for b in pst.node_blocks(src)? {
++        let mut blocks = pst.node_blocks(src)?;
++        if (std::env::var_os("PSTOFF_TC").is_some() || std::env::var_os("PSTOFF_ALIAS").is_some())
++            && what
++                .strip_prefix("node 0x")
++                .and_then(|s| u32::from_str_radix(s, 16).ok())
++                .is_some_and(|n| n & 31 == 14)
++        {
++            if blocks
++                .first()
++                .is_some_and(|b| b.len() > 3 && b[2] == 0xec && b[3] == 0x7c)
++            {
++                blocks = pst_tc_schema(blocks)?;
++            }
++        }
++        for b in blocks {
+             if b.len() <= MAX_DATA {
+                 parts.push((self.block(&b, false)?, b.len() as u64));
+                 continue;
+@@ -607,6 +621,10 @@
+     put16(&mut header, 8, MAGIC_PST); // wMagicClient: this is a PST now
+     put16(&mut header, 10, VER_UNICODE); // wVer: 512-byte pages
+     put16(&mut header, 12, VER_CLIENT); // wVerClient to match
++    if std::env::var_os("PSTOFF_HEADER").is_some() {
++        // MS-PST 2.2.2.6: newly emitted Unicode PST deprecated maps.
++        header[256..512].fill(0xff);
++    }
+     header[513] = 0; // bCryptMethod: the blocks went out plain
+     put64(&mut header, 184, eof); // ibFileEof
+     put64(&mut header, 216, nbt_bid); // ROOT.BREFNBT
+@@ -915,3 +933,171 @@
+         all[at as usize..at as usize + cb].to_vec()
+     }
+ }
++
++// EXPLORATORY: schema-only correction. No values are synthesized for added columns.
++fn pst_tc_schema(mut blocks: Vec<Vec<u8>>) -> Result<Vec<Vec<u8>>, String> {
++    let heap = Heap::new(blocks.clone())?;
++    let u16at = |b: &[u8], i: usize| u16::from_le_bytes(b[i..i + 2].try_into().unwrap()) as usize;
++    let u32at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
++    let mut info = heap.item(heap.user_root)?.to_vec();
++    // Only contents TCs have the template's subject column; leave other schemas alone.
++    let cols: Vec<Vec<u8>> = info[22..22 + info[1] as usize * 8]
++        .chunks_exact(8)
++        .map(|c| c.to_vec())
++        .collect();
++    if !cols.iter().any(|c| u32at(c, 0) == 0x0037001f) {
++        return Ok(blocks);
++    }
++    // SCANPST 16 expects binary 0E30; MS-PST's table currently calls it Integer32.
++    // Keep that version discrepancy explicit; these cells remain absent.
++    let required = [
++        0x0e300102u32,
++        0x0e330014,
++        0x0e340102,
++        0x0e3d0102,
++        0x0e3c0102,
++        0x0e380003,
++    ];
++    let add: Vec<u32> = required
++        .into_iter()
++        .filter(|_| std::env::var_os("PSTOFF_TC").is_some())
++        .filter(|t| !cols.iter().any(|c| u32at(c, 0) == *t))
++        .collect();
++    if add.is_empty() && std::env::var_os("PSTOFF_ALIAS").is_none() {
++        return Ok(blocks);
++    }
++    let old4 = u16at(&info, 2);
++    let oldceb = u16at(&info, 6);
++    let oldwidth = u16at(&info, 8);
++    let extra: usize = add
++        .iter()
++        .map(|t| if *t as u16 == 0x14 { 8 } else { 4 })
++        .sum();
++    let bitbase = cols.iter().map(|c| c[7] as usize + 1).max().unwrap_or(0);
++    let bits = bitbase + add.len();
++    if bits > 255 || cols.len() + add.len() > 255 {
++        return Err("TC columns exceed byte index".into());
++    }
++    let newceb = oldceb + extra;
++    let newwidth = newceb + bits.div_ceil(8);
++    let rm = u32at(&info, 14);
++    if rm & 31 != 0 {
++        return Err("spike does not rewrite subnode row matrix".into());
++    }
++    let oldrows = heap.item(rm)?;
++    if oldrows.len() % oldwidth != 0 {
++        return Err("TC matrix has row padding".into());
++    }
++    let mut rows = Vec::new();
++    for row in oldrows.chunks_exact(oldwidth) {
++        let mut new = vec![0; newwidth];
++        new[..old4].copy_from_slice(&row[..old4]);
++        new[old4 + extra..newceb].copy_from_slice(&row[old4..oldceb]);
++        new[newceb..newceb + (oldwidth - oldceb)].copy_from_slice(&row[oldceb..]);
++        rows.extend(new);
++    }
++    let mut clones = Vec::new();
++    if std::env::var_os("PSTOFF_ALIAS").is_some() && !rows.is_empty() {
++        let bi = blocks.len() - 1;
++        let map = u16at(&blocks[bi], 0);
++        let count = u16at(&blocks[bi], map);
++        let bth = u32at(&info, 10);
++        let mut used = std::collections::HashSet::from([bth, heap.user_root, rm]);
++        let bth_data = heap.item(bth)?;
++        if bth_data.len() >= 8 {
++            used.insert(u32at(bth_data, 4));
++        }
++        for row in rows.chunks_exact_mut(newwidth) {
++            for c in &cols {
++                let typ = u32at(c, 0) as u16;
++                if !matches!(typ, 0x001f | 0x001e | 0x0102) {
++                    continue;
++                }
++                let bit = c[7] as usize;
++                if row[newceb + bit / 8] & (0x80 >> (bit % 8)) == 0 {
++                    continue;
++                }
++                let off = u16at(c, 4);
++                let off = if off >= old4 { off + extra } else { off };
++                let hid = u32at(row, off);
++                if hid != 0 && hid & 31 == 0 && !used.insert(hid) {
++                    clones.push(heap.item(hid)?.to_vec());
++                    let newhid = ((bi as u32) << 16) | (((count + clones.len()) as u32) << 5);
++                    put32(row, off, newhid);
++                }
++            }
++        }
++    }
++    let mut updated = cols.clone();
++    for c in &mut updated {
++        let off = u16at(c, 4);
++        if off >= old4 {
++            put16(c, 4, (off + extra) as u16)
++        }
++    }
++    let mut off = old4;
++    for (i, tag) in add.iter().enumerate() {
++        let cb = if *tag as u16 == 0x14 { 8 } else { 4 };
++        let mut c = vec![0; 8];
++        put32(&mut c, 0, *tag);
++        put16(&mut c, 4, off as u16);
++        c[6] = cb as u8;
++        c[7] = (bitbase + i) as u8;
++        off += cb;
++        updated.push(c);
++    }
++    updated.sort_by_key(|c| u32at(c, 0));
++    info.truncate(22);
++    info[1] = updated.len() as u8;
++    for i in [2, 4, 6] {
++        let old = u16at(&info, i);
++        put16(&mut info, i, (old + extra) as u16)
++    }
++    put16(&mut info, 8, newwidth as u16);
++    for c in updated {
++        info.extend(c)
++    }
++    // Preserve every HID, other allocation and row bit. Only physical offsets change.
++    let last = blocks.len() - 1;
++    for (bi, b) in blocks.iter_mut().enumerate() {
++        let map = u16at(b, 0);
++        let count = u16at(b, map);
++        let start = u16at(b, map + 4);
++        let mut out = b[..start].to_vec();
++        let mut offsets = Vec::new();
++        let mut free = 0;
++        let extra_allocs = if bi == last { clones.len() } else { 0 };
++        for ai in 1..=count + extra_allocs {
++            offsets.push(out.len());
++            let hid = ((bi as u32) << 16) | ((ai as u32) << 5);
++            let val = if ai > count {
++                &clones[ai - count - 1][..]
++            } else if hid == heap.user_root {
++                &info[..]
++            } else if rm != 0 && hid == rm {
++                &rows[..]
++            } else {
++                heap.item(hid)?
++            };
++            if val.is_empty() {
++                free += 1
++            }
++            out.extend(val);
++        }
++        offsets.push(out.len());
++        let map = out.len();
++        out.extend(((count + extra_allocs) as u16).to_le_bytes());
++        out.extend((free as u16).to_le_bytes());
++        for o in offsets {
++            out.extend((o as u16).to_le_bytes())
++        }
++        if out.len() > MAX_DATA {
++            return Err(
++                "schema expansion exceeds PST heap block; needs full heap relocation".into(),
++            );
++        }
++        put16(&mut out, 0, map as u16);
++        *b = out;
++    }
++    Ok(blocks)
++}
