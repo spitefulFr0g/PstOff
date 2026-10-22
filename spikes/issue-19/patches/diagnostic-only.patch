@@ -1,0 +1,109 @@
+--- a/src/convert.rs
++++ b/src/convert.rs
+@@ -49,0 +50,2 @@
++#[path = "q19.rs"]
++pub mod q19;
+@@ -183 +185 @@
+-        let mut blocks = pst.node_blocks(src)?;
++        let mut blocks = q19::blocks(src,pst.node_blocks(src)?);
+@@ -198,0 +201,8 @@
++        }
++        if let Ok(tag) = std::env::var("PSTOFF_DIAG_CLEAR") {
++            if what.starts_with("node 0x") && blocks.first().is_some_and(|b| b.len()>3 && b[2]==0xec && b[3]==0x7c) {
++                for t in tag.split(',') {blocks = diag_clear(blocks, u32::from_str_radix(t,16).map_err(|e|e.to_string())?)?;}
++            }
++        }
++        if std::env::var_os("PSTOFF_DIAG_STATUS").is_some() && what.strip_prefix("node 0x").and_then(|s|u32::from_str_radix(s,16).ok()).is_some_and(|n|matches!(n&31,4|8)) {
++            blocks=diag_status(blocks)?;
+@@ -1111,0 +1122,32 @@
++
++// DISPOSABLE DIAGNOSTIC ONLY: masks one column identity, never accepted output policy.
++fn diag_clear(mut blocks:Vec<Vec<u8>>, tag:u32)->Result<Vec<Vec<u8>>,String>{
++ let h=Heap::new(blocks.clone())?; let mut i=h.item(h.user_root)?.to_vec();
++ let u16b=|b:&[u8],o|u16::from_le_bytes(b[o..o+2].try_into().unwrap()) as usize;
++ let u32b=|b:&[u8],o|u32::from_le_bytes(b[o..o+4].try_into().unwrap());
++ let mut cols:Vec<_>=i[22..].chunks_exact(8).map(|c|c.to_vec()).collect();
++ assert!(!cols.iter().any(|c|u32b(c,0)>>16==(0x7000|(tag&0xfff))));
++ let mut found=false;
++ for c in &mut cols {if u32b(c,0)>>16==tag {c[2..4].copy_from_slice(&((0x7000|(tag&0xfff)) as u16).to_le_bytes());found=true;}}
++ if !found{return Ok(blocks)};
++ cols.sort_by_key(|c|u32b(c,0));for (n,c) in cols.iter().enumerate(){i[22+n*8..30+n*8].copy_from_slice(c);}
++ let hid=h.user_root;let bi=(hid>>16) as usize;let ai=((hid>>5)&0x7ff) as usize;
++ let map=u16b(&blocks[bi],0);let start=u16b(&blocks[bi],map+4+(ai-1)*2);
++ blocks[bi][start..start+i.len()].copy_from_slice(&i);
++ Ok(blocks)
++}
++
++// DISPOSABLE: insert missing PC message status zero (all fixture cache cells are zero).
++fn diag_status(mut blocks:Vec<Vec<u8>>)->Result<Vec<Vec<u8>>,String>{
++ let h=Heap::new(blocks.clone())?;
++ let u16b=|b:&[u8],o|u16::from_le_bytes(b[o..o+2].try_into().unwrap()) as usize;
++ let u32b=|b:&[u8],o|u32::from_le_bytes(b[o..o+4].try_into().unwrap());
++ let bh=h.item(h.user_root)?;assert_eq!(&bh[..4],&[0xb5,2,6,0]);let root=u32b(bh,4);
++ let mut rs:Vec<_>=h.item(root)?.chunks_exact(8).map(|r|r.to_vec()).collect();
++ if rs.iter().any(|r|u16b(r,0)==0x0e17){return Ok(blocks)};
++ rs.push(vec![0x17,0x0e,3,0,0,0,0,0]);rs.sort_by_key(|r|u16b(r,0));let updated=rs.concat();
++ for (bi,b) in blocks.iter_mut().enumerate(){let map=u16b(b,0);let count=u16b(b,map);let start=u16b(b,map+4);let mut out=b[..start].to_vec();let mut offsets=Vec::new();let mut free=0u16;
++ for ai in 1..=count {offsets.push(out.len() as u16);let hid=((bi as u32)<<16)|((ai as u32)<<5);let v=if hid==root{&updated[..]}else{h.item(hid)?};if v.is_empty(){free+=1}out.extend(v);}
++ offsets.push(out.len() as u16);if out.len()%2!=0{out.push(0)}let map=out.len();out.extend((count as u16).to_le_bytes());out.extend(free.to_le_bytes());for o in offsets{out.extend(o.to_le_bytes())}assert!(out.len()<=8176);out[..2].copy_from_slice(&(map as u16).to_le_bytes());*b=out;
++ }Ok(blocks)
++}
+--- /dev/null
++++ b/src/q19.rs
+@@ -0,0 +1,56 @@
++// Diagnostic only. Never enabled by conversion policy. PUBLIC fixture, no repair.
++use crate::{ltp::Heap,ndb::{Pst,Node}};
++use std::{collections::BTreeMap,sync::OnceLock};
++static OVERRIDES:OnceLock<BTreeMap<u64,Vec<Vec<u8>>>>=OnceLock::new();
++fn u16b(b:&[u8],o:usize)->usize{u16::from_le_bytes(b[o..o+2].try_into().unwrap()) as usize}
++fn u32b(b:&[u8],o:usize)->u32{u32::from_le_bytes(b[o..o+4].try_into().unwrap())}
++pub fn blocks(bid:u64,original:Vec<Vec<u8>>)->Vec<Vec<u8>>{OVERRIDES.get().and_then(|m|m.get(&bid)).cloned().unwrap_or(original)}
++pub fn plan(p:&mut Pst,ns:&[Node],tags:&[u32],align:bool,flags:bool,zero:&[u32],promote:bool,conv:bool,extra:Option<u16>,remove:&[u32],selected:Option<u32>)->Result<(),String>{
++ let mut out=BTreeMap::new();let mut changed=0;
++ for n in ns.iter().filter(|n|matches!(n.nid_type(),14|15|16)){
++ let mut blocks=p.node_blocks(n.bid_data)?;let h=Heap::new(blocks.clone())?;let i=h.item(h.user_root)?;
++ let cols:Vec<_>=i[22..22+i[1] as usize*8].chunks_exact(8).filter(|c|tags.contains(&(u32b(c,0)>>16))).collect();
++ if cols.is_empty() && !flags && zero.is_empty() {continue}let rm=u32b(i,14);if rm==0{continue}let width=u16b(i,8);let ceb=u16b(i,6);
++ let mut edit=|data:&mut [u8]|{assert_eq!(data.len()%width,0);for r in data.chunks_exact_mut(width){if selected.is_some_and(|nid|u32b(r,0)!=nid){continue}
++ for tag in zero {if u32b(r,0)&31==4 {if let Some(c)=i[22..22+i[1] as usize*8].chunks_exact(8).find(|c|u32b(c,0)>>16==*tag){let bit=c[7] as usize;assert_eq!(r[ceb+bit/8]&(0x80>>(bit%8)),0);r[ceb+bit/8]|=0x80>>(bit%8);let off=u16b(c,4);r[off..off+c[6] as usize].fill(0);}}}
++ if flags && u32b(r,0)&31==4 {if let Some(c)=i[22..22+i[1] as usize*8].chunks_exact(8).find(|c|u32b(c,0)==0x0e070003){let off=u16b(c,4);let v=u32b(r,off);r[off..off+4].copy_from_slice(&(v&!0x30000).to_le_bytes());}}
++ for c in &cols{let bit=c[7] as usize;let b=&mut r[ceb+bit/8];if *b&(0x80>>(bit%8))!=0{changed+=1;}*b&=!(0x80>>(bit%8));}}};
++ if rm&31==0{let bi=(rm>>16) as usize;let ai=((rm>>5)&0x7ff) as usize;let map=u16b(&blocks[bi],0);let start=u16b(&blocks[bi],map+4+(ai-1)*2);let end=u16b(&blocks[bi],map+4+ai*2);edit(&mut blocks[bi][start..end]);assert!(out.insert(n.bid_data,blocks).is_none());}
++ else{let sub=p.subnodes(n.bid_sub)?.get(&rm).copied().ok_or("missing row subnode")?;let mut rows=p.node_blocks(sub.data)?;for b in &mut rows{edit(b)}assert!(out.insert(sub.data,rows).is_none());}
++ }
++
++
++ if !remove.is_empty(){for n in ns.iter().filter(|n|n.nid_type()==14){let blocks=out.get(&n.bid_data).cloned().unwrap_or(p.node_blocks(n.bid_data)?);let h=Heap::new(blocks.clone())?;let mut info=h.item(h.user_root)?.to_vec();let cols:Vec<_>=info[22..22+info[1] as usize*8].chunks_exact(8).filter(|c|!remove.contains(&(u32b(c,0)>>16))).map(|c|c.to_vec()).collect();if cols.len()!=info[1] as usize{info[1]=cols.len() as u8;info.truncate(22);info.extend(cols.concat());out.insert(n.bid_data,rebuild(blocks,&BTreeMap::from([(h.user_root,info)]))?);}}}
++ if align {for n in ns.iter().filter(|n|matches!(n.nid_type(),14|15|16)){
++ let blocks=out.get(&n.bid_data).cloned().unwrap_or(p.node_blocks(n.bid_data)?);let h=Heap::new(blocks.clone())?;let i=h.item(h.user_root)?;
++ let Some(c)=i[22..22+i[1] as usize*8].chunks_exact(8).find(|c|u32b(c,0)==0x0042001f)else{continue};
++ let rm=u32b(i,14);if rm==0{continue};assert_eq!(rm&31,0);let width=u16b(i,8);let ceb=u16b(i,6);let mut replacements=BTreeMap::new();
++ for r in h.item(rm)?.chunks_exact(width){let bit=c[7] as usize;if r[ceb+bit/8]&(0x80>>(bit%8))==0{continue};let nid=u32b(r,0);let m=ns.iter().find(|m|m.nid==nid).ok_or("item missing")?;let mh=Heap::new(p.node_blocks(m.bid_data)?)?;let bh=mh.item(mh.user_root)?;assert_eq!(bh[3],0);let Some(rec)=mh.item(u32b(bh,4))?.chunks_exact(8).find(|r|u16b(r,0)==0x0042)else{continue};assert_eq!(u16b(rec,2),0x1f);let pcid=u32b(rec,4);assert_eq!(pcid&31,0);let value=mh.item(pcid)?.to_vec();let hid=u32b(r,u16b(c,4));assert_eq!(hid&31,0);if value!=h.item(hid)?{if let Some(old)=replacements.insert(hid,value.clone()){assert_eq!(old,value)}}
++ }
++ if !replacements.is_empty(){println!("DIAGNOSTIC align0042_table={:x} allocations={}",n.nid,replacements.len());out.insert(n.bid_data,rebuild(blocks,&replacements)?);}
++ }}
++
++ if conv {for n in ns.iter().filter(|n|matches!(n.nid_type(),14|15|16)){
++ let blocks=out.get(&n.bid_data).cloned().unwrap_or(p.node_blocks(n.bid_data)?);let h=Heap::new(blocks.clone())?;let i=h.item(h.user_root)?;
++ let Some(c)=i[22..22+i[1] as usize*8].chunks_exact(8).find(|c|u32b(c,0)==0x30130102)else{continue};
++ let rm=u32b(i,14);if rm==0{continue};assert_eq!(rm&31,0);let width=u16b(i,8);let ceb=u16b(i,6);let mut replacements=BTreeMap::new();
++ for r in h.item(rm)?.chunks_exact(width){let bit=c[7] as usize;if r[ceb+bit/8]&(0x80>>(bit%8))==0{continue};let nid=u32b(r,0);let m=ns.iter().find(|m|m.nid==nid).ok_or("item missing")?;let pc=crate::ltp::read_node_pc(p,m)?;assert!(matches!(pc.props.get(&0x3016),Some(crate::ltp::Value::Bool(true))));let Some(crate::ltp::Value::Bytes(ix))=pc.props.get(&0x0071)else{return Err("missing conversation index".into())};assert!(ix.len()>=22&&ix[0]==1);let value=ix[6..22].to_vec();let hid=u32b(r,u16b(c,4));assert_eq!(hid&31,0);if value!=h.item(hid)?{if let Some(old)=replacements.insert(hid,value.clone()){assert_eq!(old,value)}}
++ }
++ if !replacements.is_empty(){println!("DIAGNOSTIC align3013_table={:x} allocations={}",n.nid,replacements.len());out.insert(n.bid_data,rebuild(blocks,&replacements)?);}
++ }}
++
++ if promote || extra.is_some() {let mut values:BTreeMap<u32,BTreeMap<u16,Vec<u8>>>=BTreeMap::new();
++ for n in ns.iter().filter(|n|matches!(n.nid_type(),14|15|16)){for r in crate::ltp::read_tc(p,n.bid_data,n.bid_sub)?.rows {if selected.is_some_and(|nid|r.id!=nid){continue}if !ns.iter().any(|m|m.nid==r.id&&matches!(m.nid_type(),4|8)){continue}for id in (if promote{vec![0x65e2,0x65e3]}else{vec![]}).into_iter().chain(extra){let value=match r.props.get(&id){Some(crate::ltp::Value::Bytes(v))=>Some(v.clone()),Some(crate::ltp::Value::Int(v)) if id==0x6628=>Some(v.to_le_bytes().to_vec()),_=>None};if let Some(v)=value {if let Some(old)=values.entry(r.id).or_default().insert(id,v.clone()){assert_eq!(old,v);}}}}}
++ for (nid,props) in values {let n=ns.iter().find(|n|n.nid==nid).unwrap();assert!(!out.contains_key(&n.bid_data));out.insert(n.bid_data,append_props(p.node_blocks(n.bid_data)?,&props)?);}
++ }
++ println!("DIAGNOSTIC cleared_present_cells={changed}");OVERRIDES.set(out).map_err(|_|"already planned")?;Ok(())
++}
++fn rebuild(blocks:Vec<Vec<u8>>, replacements:&BTreeMap<u32,Vec<u8>>)->Result<Vec<Vec<u8>>,String>{
++ let h=Heap::new(blocks.clone())?;let mut result=Vec::new();for (bi,b) in blocks.iter().enumerate(){let map=u16b(b,0);let count=u16b(b,map);let start=u16b(b,map+4);let mut out=b[..start].to_vec();let mut offsets=Vec::new();let mut free=0u16;for ai in 1..=count{offsets.push(out.len() as u16);let hid=((bi as u32)<<16)|((ai as u32)<<5);let v=replacements.get(&hid).map(|v|v.as_slice()).unwrap_or(h.item(hid)?);if v.is_empty(){free+=1}out.extend(v)}offsets.push(out.len() as u16);if out.len()%2!=0{out.push(0)}let map=out.len();out.extend((count as u16).to_le_bytes());out.extend(free.to_le_bytes());for o in offsets{out.extend(o.to_le_bytes())}assert!(out.len()<=8176);out[..2].copy_from_slice(&(map as u16).to_le_bytes());result.push(out)}Ok(result)
++}
++
++fn append_props(blocks:Vec<Vec<u8>>,props:&BTreeMap<u16,Vec<u8>>)->Result<Vec<Vec<u8>>,String>{
++ let h=Heap::new(blocks.clone())?;let bh=h.item(h.user_root)?;assert_eq!(&bh[..4],&[0xb5,2,6,0]);let root=u32b(bh,4);let mut rs:Vec<_>=h.item(root)?.chunks_exact(8).map(|r|r.to_vec()).collect();let last=blocks.len()-1;let count=u16b(&blocks[last],u16b(&blocks[last],0));let mut extras=Vec::new();
++ for (id,value) in props {assert!(!rs.iter().any(|r|u16b(r,0)==*id as usize));extras.push(value.clone());let hid=((last as u32)<<16)|(((count+extras.len()) as u32)<<5);let mut rec=id.to_le_bytes().to_vec();rec.extend((if *id==0x6628 {0x0014u16}else{0x0102u16}).to_le_bytes());rec.extend(hid.to_le_bytes());rs.push(rec);}
++ rs.sort_by_key(|r|u16b(r,0));let updated=rs.concat();let mut result=Vec::new();for (bi,b) in blocks.iter().enumerate(){let map=u16b(b,0);let count=u16b(b,map);let start=u16b(b,map+4);let extra=if bi==last{extras.len()}else{0};let mut out=b[..start].to_vec();let mut offsets=Vec::new();let mut free=0u16;for ai in 1..=count+extra{offsets.push(out.len() as u16);let hid=((bi as u32)<<16)|((ai as u32)<<5);let v=if ai>count {&extras[ai-count-1][..]}else if hid==root{&updated[..]}else{h.item(hid)?};if v.is_empty(){free+=1}out.extend(v)}offsets.push(out.len() as u16);if out.len()%2!=0{out.push(0)}let map=out.len();out.extend(((count+extra) as u16).to_le_bytes());out.extend(free.to_le_bytes());for o in offsets{out.extend(o.to_le_bytes())}assert!(out.len()<=8176);out[..2].copy_from_slice(&(map as u16).to_le_bytes());result.push(out)}Ok(result)
++}
