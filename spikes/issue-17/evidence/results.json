@@ -1,0 +1,176 @@
+{
+  "public_source_sha256": "b18ff390d0c22273029ee580ab6025976af69a4f84e276d1b1c01a988650853d",
+  "runs": {
+    "baseline": {
+      "sha256": "913c8b653ebae62ec19f1268e1c0cdffe91223d0596b57739e3beab68e05a84e",
+      "size": 226816,
+      "scan": {
+        "Alias": "gate-913c8b653eba",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 326,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true
+      },
+      "structural_audit": {
+        "exit": 101,
+        "summary": "nodes=308 byte_identical_non_contents_non_store_streams=266 byte_identical_subnodes=136 identical_table_rows=67 contents_tables=41 missing_columns=244 shared_cell_allocations=6 bad_header_fp=true message_pcs_without_modtime=17 table_rows_with_modtime=18"
+      }
+    },
+    "schema": {
+      "sha256": "017e4fa335a40c82fa23c899a0adbb1adb08d362bb954fbf2eac5ff72f8a5cdd",
+      "size": 229376,
+      "scan": {
+        "Alias": "gate-017e4fa335a4",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 93,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true
+      }
+    },
+    "header": {
+      "sha256": "a58e7308f158148dedc908cbf4da8c31beb653e71adf65a2aa49dfae24cc799e",
+      "size": 226816,
+      "scan": {
+        "Alias": "gate-a58e7308f158",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 325,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true
+      }
+    },
+    "schema-header": {
+      "sha256": "2a41a17e17475e314fb878abaee3319aec3ff3020508e790b2263d7e45e68759",
+      "size": 229376,
+      "scan": {
+        "Alias": "gate-2a41a17e1747",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 92,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true
+      }
+    },
+    "alias": {
+      "sha256": "6d582aa267be105fda375569123971eebaad704e49cec62320a3c588d39b6670",
+      "size": 227328,
+      "scan": {
+        "Alias": "gate-6d582aa267be",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 302,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true
+      }
+    },
+    "schema-header-exclusive": {
+      "sha256": "485eebf759829911edfadf6c946de58fb02e2fa03ba300a0d56786751fc482ee",
+      "size": 229888,
+      "scan": {
+        "Alias": "gate-485eebf75982",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 34,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true
+      },
+      "structural_audit": {
+        "exit": 0,
+        "summary": "nodes=308 byte_identical_non_contents_non_store_streams=266 byte_identical_subnodes=136 identical_table_rows=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=17 table_rows_with_modtime=18"
+      },
+      "microsoft_reader": "version=Unicode amap_valid=Valid2\nstore_property_count=25\nroot_rows=2 decoded_root_values=16\nipm_key_matches=true\nipm_opened=true hierarchy_present=true"
+    }
+  },
+  "controls": {
+    "valid_empty": {
+      "Alias": "gate-c16ae985d120",
+      "ScanFinished": true,
+      "ScanExitCode": 1,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": true,
+      "DiagnosticLineCount": 0,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+      "gate": "PASS",
+      "original_output_unchanged": true
+    },
+    "invalid_zeros": {
+      "Alias": "gate-ad7facb2586f",
+      "ScanFinished": true,
+      "ScanExitCode": 0,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": false,
+      "DiagnosticLineCount": 1,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+      "gate": "FAIL",
+      "original_output_unchanged": true
+    }
+  },
+  "preservation": {
+    "identical_property_values": 1493,
+    "identical_table_rows": 67,
+    "changed_keys": [
+      "PC 00000021",
+      "VALUE 00000021:3001",
+      "VALUE 00000021:67ff"
+    ],
+    "missing_keys": [],
+    "added_keys": [
+      "VALUE 00000021:35df",
+      "VALUE 00000021:35e0",
+      "VALUE 00000021:35e3",
+      "VALUE 00000021:35e7"
+    ]
+  },
+  "remaining": {
+    "missing_modification_time": 17,
+    "table_object_mismatch": 17,
+    "missing_column": 0,
+    "failed_addref": 0,
+    "rgbFP": 0,
+    "invalid_content_count": 0
+  },
+  "source_timestamp_option": {
+    "message_pcs": 17,
+    "pcs_missing_modification_time": 17,
+    "messages_with_unambiguous_cached_modification_time": 17,
+    "conflicting_cached_times": 0,
+    "promotion_applied": false
+  },
+  "verdict": "Structural regressions pass; clean SCANPST gate remains FAIL. Product decision on promoting cached timestamps is open. Outlook validation belongs to parent."
+}
