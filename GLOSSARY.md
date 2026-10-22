@@ -26,6 +26,10 @@ _Avoid_: Dead OST, broken OST
 An OST that holds only part of its mailbox, because Outlook synced only recent items or only message headers.
 _Avoid_: Incomplete OST, partial sync
 
+**Mailbox completeness**:
+Whether an OST contains every folder and item in the Mailbox.
+_Avoid_: Conversion completeness, complete conversion
+
 **Item**:
 One entry in a folder: a message, appointment, contact, task, note or journal entry.
 _Avoid_: Email, message (when every item type is meant)
@@ -37,15 +41,15 @@ Producing a PST that holds the same folders and items as a source OST.
 _Avoid_: Export, migration, repair
 
 **Copy mode**:
-The default way to convert: the OST is only read, never written, and the PST is a new file.
+Conversion in which the source OST is read without modification and a new PST is produced.
 _Avoid_: Safe mode, read-only mode
 
 **In-place mode**:
-The second way to convert, where the OST file itself becomes the PST and no second copy is written. It puts the only copy at risk, so it's offered only behind a warning and a backup prompt.
+Conversion in which the source OST itself becomes the PST without a second full output file.
 _Avoid_: Overwrite mode, direct mode
 
 **Split**:
-A conversion whose output is spread across several PSTs, each kept under a size limit, because one PST would be too large.
+A Conversion that divides its output into size-limited PST files while keeping each Item whole.
 _Avoid_: Chunk, volume, part file
 
 **Faithful**:
