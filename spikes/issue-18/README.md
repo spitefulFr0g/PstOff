@@ -115,3 +115,23 @@ is preserved.
 
 See [evidence/results.json](evidence/results.json) for sanitized per-item
 provenance, gate summaries and exact changed/added property keys.
+
+## Parent verification
+
+A separate scan with a distinct Windows alias reproduced **FAIL, 17 diagnostic
+lines**, finished scan and unchanged original/copy. Independent Debian libpff
+20180714 reads the same 64 reachable objects and 1,516 output properties:
+1,493 existing raw values match; the two inherited store changes remain; four
+store properties and exactly 17 `30080040` item properties are added. No source
+property disappears and no reader error occurs. See
+[evidence/libpff-parent-comparison.json](evidence/libpff-parent-comparison.json)
+and [evidence/parent-scan.json](evidence/parent-scan.json). This coverage does not
+include complete table/payload equivalence or establish a Faithful result.
+
+Outlook acceptance remains unverified: a known-good public SDK control hangs at
+`AddStoreEx` for 20 seconds, including a fresh Windows-local copy and a restarted
+synthetic validation profile. Repeating with the documented Unicode constant
+(`olStoreUnicode = 2`, rather than ANSI constant 3 in the old harness) still
+hangs. The PowerShell thread is STA. These controls cannot establish a defect
+in this candidate, nor do they establish licensing as the cause. Reference:
+[Microsoft OlStoreType](https://learn.microsoft.com/en-us/office/vba/api/outlook.olstoretype).

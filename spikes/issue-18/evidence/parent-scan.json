@@ -1,0 +1,13 @@
+{
+  "Alias": "parent-q12-dc91ddc7b91a",
+  "ScanFinished": true,
+  "ScanExitCode": 1,
+  "ScanInputUnchanged": true,
+  "LogExists": true,
+  "LogReportsFinished": true,
+  "DiagnosticLineCount": 17,
+  "OutlookChecked": false,
+  "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+  "original_output_unchanged": true,
+  "gate": "FAIL"
+}

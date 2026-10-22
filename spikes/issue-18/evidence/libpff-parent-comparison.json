@@ -1,0 +1,40 @@
+{
+  "public_candidate_sha256": "dc91ddc7b91affe0bd71afaa87bb97a1c5afe8ad61a016b5d12b161cae286177",
+  "reader_version": "20180714",
+  "source_objects": 64,
+  "output_objects": 64,
+  "same_object_ids": true,
+  "source_properties": 1495,
+  "output_properties": 1516,
+  "identical_raw_properties": 1493,
+  "changed_keys": [
+    "00000021:0:3001:001f",
+    "00000021:0:67ff:0003"
+  ],
+  "added_keys": [
+    "00000021:0:35df:0003",
+    "00000021:0:35e0:0102",
+    "00000021:0:35e3:0102",
+    "00000021:0:35e7:0102",
+    "00100028:0:3008:0040",
+    "00100048:0:3008:0040",
+    "00100068:0:3008:0040",
+    "00100088:0:3008:0040",
+    "001000a8:0:3008:0040",
+    "001000c8:0:3008:0040",
+    "001000e8:0:3008:0040",
+    "00100108:0:3008:0040",
+    "00100128:0:3008:0040",
+    "00100148:0:3008:0040",
+    "00100168:0:3008:0040",
+    "00100188:0:3008:0040",
+    "001001a8:0:3008:0040",
+    "001001c8:0:3008:0040",
+    "00200084:0:3008:0040",
+    "002000e4:0:3008:0040",
+    "00200184:0:3008:0040"
+  ],
+  "missing_keys": [],
+  "reader_errors": [],
+  "coverage": "Reachable property-bearing object graph only; not complete tables/payloads/Outlook validation."
+}
