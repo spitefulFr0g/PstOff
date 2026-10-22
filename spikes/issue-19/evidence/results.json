@@ -292,7 +292,7 @@
       },
       "experimental_only": true
     },
-    "ceb-65e2,65e3": {
+    "clear-pair": {
       "sha256": "eb109a5eff5611332c3c8d5169da06c97d6df98d4df29605c903601ec1b0ca7f",
       "size": 230400,
       "strict_scan": {
