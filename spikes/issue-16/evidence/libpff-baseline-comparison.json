@@ -1,0 +1,19 @@
+{
+  "source_nodes": 64,
+  "result_nodes": 64,
+  "matched_raw_properties": 1493,
+  "changed_raw_property_keys": [
+    "00000021:0:3001:001f",
+    "00000021:0:67ff:0003"
+  ],
+  "missing_raw_property_keys": [],
+  "added_raw_property_keys": [
+    "00000021:0:35df:0003",
+    "00000021:0:35e0:0102",
+    "00000021:0:35e3:0102",
+    "00000021:0:35e7:0102"
+  ],
+  "source_errors": [],
+  "result_errors": [],
+  "coverage": "libpff reachable object graph from store/root folder; excludes any unenumerated objects and is not full NDB/property equivalence"
+}

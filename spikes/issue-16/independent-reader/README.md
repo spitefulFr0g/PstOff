@@ -1,0 +1,11 @@
+# Independent raw-property baseline
+
+Public fixtures only. Debian trixie libpff/pypff 20180714 packages were downloaded with apt and extracted under a user-local reader root; package hashes match apt metadata and are recorded here. No package maintainer scripts were executed and no system installation was changed. This is an independent test utility, not a PstOff runtime dependency or a distribution license decision.
+
+`inventory.py` reads only `/input/store`, fingerprints raw property bytes in the object graph reachable from the store/root folder, and emits identifiers, property types, lengths and digests without values. Run it in bubblewrap with no network/home mount, using the Debian reader libraries and Python module read-only. It cannot access the private directory in that namespace. The source public fixture and map-rebuilt output were mounted read-only for separate invocations.
+
+Runtime layout: mount the extracted package root at `/reader`, the inventory script at `/probe.py`, and the selected public fixture at `/input/store`. Set `PYTHONPATH=/reader/usr/lib/python3/dist-packages`, `LD_LIBRARY_PATH=/reader/usr/lib/x86_64-linux-gnu`, and execute `/usr/bin/python3 -B /probe.py`. System `/usr`, `/lib`, `/lib64` are read-only; `/proc`, `/dev` and temporary `/tmp` are the only other mounts. Clear the inherited environment. Neither fixture nor any user home directory is writable or broadly mounted.
+
+The source and map-rebuilt baseline yield 64 property-bearing objects each: 40 ordinary folders, six search folders, three ordinary messages, 14 associated messages and one store. All 1,493 unchanged raw properties match. Two store values differ (display name 0x3001, password sentinel 0x67ff); four store properties are added (0x35df, 0x35e0, 0x35e3, 0x35e7); no source property disappears and there are no reader errors. The aggregate comparison is under ../evidence/libpff-baseline-comparison.json.
+
+This independently confirms the earlier same-candidate comparison on this graph. It does not establish table-schema correctness, every internal node, complete attachment/embedded-message/recipient payload coverage, or every named-property mapping. Those require further independent validation. SCANPST still rejects the baseline's schema/metadata; this is not a Faithful verdict.

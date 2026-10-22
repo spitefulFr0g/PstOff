@@ -58,7 +58,7 @@ The runner accepts no arbitrary input, checks candidate revisions/source diffs a
 
 ## Unperformed / unknown
 
-The initial subagent stage did not run Windows checks. The parent subsequently ran scan-only SCANPST as recorded below. Candidate Outlook acceptance, Windows item/property checks, and full independent item validation remain unperformed. libpff/pypff was not installed. No complete attachment/embedded-message byte comparison, recursive subnode inventory, named-property identity comparison, all-type raw-property audit, large-heap stress fixture or broad corpus was attempted. Same-candidate comparisons share parser blind spots and compare decoded debug representations, not all raw serialized tags/types. Unknown stays unknown; this result is not Faithful.
+The initial subagent stage did not run Windows checks. The parent subsequently ran scan-only SCANPST as recorded below. Candidate Outlook acceptance, Windows item/property checks, and full independent item validation remain unperformed. libpff/pypff was not installed during the initial stage; the parent later ran an independent raw-property baseline, documented below. No complete attachment/embedded-message byte comparison, recursive subnode inventory, named-property identity comparison, all-type raw-property audit, large-heap stress fixture or broad corpus was attempted. Same-candidate comparisons share parser blind spots and compare decoded debug representations, not all raw serialized tags/types. Unknown stays unknown; this result is not Faithful.
 
 ## Parent handoff
 
@@ -91,3 +91,9 @@ That composed output still produces **326 diagnostic lines** in scan-only SCANPS
 Reproduce the narrow map experiment by building `--bin map-spike` with the same offline manifest/target directory above and running the recorded bubblewrap command. Reproduce Windows checks by passing the generated public PST's Windows-visible path and an alphanumeric alias to the PowerShell validator. The default performs scan-only checks; `-CheckOutlook` is optional. Outlook COM acquisition was intermittent, including a repeated 45-second-bounded control timeout; candidate Outlook acceptance was not asserted or inferred from this.
 
 **Verdict:** the hybrid direction has concrete reuse evidence, but the zero-error writer gate remains blocked by allocation/header and table-schema work, with large-heap handling and full semantic preservation also unproven. Keep the dependency/fork decision provisional. No SCANPST repair was run and no private OST was accessed. Extending this into a complete writer is outside this bounded baseline spike.
+
+## Independent libpff baseline follow-up
+
+The parent prepared Debian-packaged pypff 20180714 separately from both Rust candidates, using verified apt package digests and offline, read-only public-fixture execution. It independently enumerates the same 64 property-bearing objects in the source and map-rebuilt baseline. All 1,493 unchanged raw property values match; no source property disappears, the same two store properties differ, and the same four are added. No reader errors occur.
+
+See `independent-reader/README.md`, its value-free inventory script, and `evidence/libpff-baseline-comparison.json`. This supplies independent evidence for that reachable object graph, not a full-table/payload preservation verdict. It neither changes the SCANPST failure nor proves the writer ready.

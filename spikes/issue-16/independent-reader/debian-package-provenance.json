@@ -1,0 +1,22 @@
+[
+  {
+    "package": "libpff1t64",
+    "sha256": "2fda2cc8fa4c380a65f2679369c2b6bd090077ff29a0940390c140bde560192d",
+    "apt_digest_verified": true
+  },
+  {
+    "package": "libbfio1",
+    "sha256": "c64c853f42df88409c54d08b8b43d631fbb25264eee17dc92042538ca73b0715",
+    "apt_digest_verified": true
+  },
+  {
+    "package": "python3-pypff",
+    "sha256": "b0c7469ebb278d6cd871dde7b8ffdbbe4a753880b16335e524d23760270aae50",
+    "apt_digest_verified": true
+  },
+  {
+    "package": "pff-tools",
+    "sha256": "4e85db6d2593004ce0d539ec835ff9478856d3d5a23bef823fb03cb9dea350dd",
+    "apt_digest_verified": true
+  }
+]
