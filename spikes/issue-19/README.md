@@ -149,3 +149,15 @@ writers. Raw dumps, history bytes, message values and raw scan logs stay local;
 [evidence/results.json](evidence/results.json) contains sanitized aggregate/key
 and row-identity evidence. `trials.py` retains rejected exploratory interventions
 for reproducibility, clearly diagnostic only.
+
+## Parent verification
+
+A separate strict scan reproduced **FAIL/3**, with a completed scan and unchanged
+original/Windows copy. Independent libpff 20180714 reads the same 64 reachable
+objects as accepted Q12: all 1,516 existing raw property values match, no value
+is changed or removed, and exactly 34 `65e20102`/`65e30102` properties are added.
+No reader errors occurred. See
+[evidence/libpff-parent-comparison.json](evidence/libpff-parent-comparison.json).
+This checks the diagnostic artifact's reachable property graph, not complete
+tables/payloads, source-cache authenticity or Outlook acceptance. It does not
+authorize the new policy or clear the three remaining failures.
