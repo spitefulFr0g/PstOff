@@ -1,0 +1,966 @@
+<!doctype html>
+<!--
+  PROTOTYPE, throw away. Answers "What should PstOff look like?" with three
+  structurally different converter flows, switchable via ?variant=A|B|C or the
+  floating bar (and the ← → keys). All data is fake and lives in memory; no
+  file is read or written. Open this file in a browser; nothing to install.
+
+  A  Guided    — one step at a time, a left step rail, big type, Back / Next.
+  B  Workbench — dense dark master-detail: queue table, inspector tabs, status bar.
+  C  Flow      — From → What → To on one screen; the Convert button is the progress bar;
+                 the report arrives as a receipt sheet.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PstOff — prototype frontends (A/B/C)</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 14px; color: #1b1b1f;
+    background: #5b6472 radial-gradient(circle at 20% 10%, #8b93a3 0, #4a515e 60%, #343943 100%);
+    display: grid; place-items: center; padding: 28px 28px 90px;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  input { font: inherit; }
+  .num { font-variant-numeric: tabular-nums; }
+  .fg { display: inline-block; width: 10px; height: 13px; border: 1.5px solid currentColor; border-radius: 2px; opacity: .55; margin-right: 8px; vertical-align: -2px; flex: none; }
+
+  /* ---------- desktop window frame (shared) ---------- */
+  .win {
+    width: min(1220px, 100%); height: min(780px, calc(100vh - 120px)); min-height: 600px;
+    border-radius: 8px; overflow: hidden; display: flex; flex-direction: column;
+    box-shadow: 0 30px 80px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.25);
+  }
+  .titlebar { height: 34px; flex: none; display: flex; align-items: center; font-size: 12px; user-select: none; }
+  .titlebar .t { padding-left: 14px; flex: 1; display: flex; gap: 8px; align-items: center; }
+  .titlebar .wc { display: flex; height: 100%; }
+  .titlebar .wc span { width: 46px; display: grid; place-items: center; font-size: 11px; opacity: .8; }
+  .logo { width: 14px; height: 14px; border-radius: 3px; display: inline-block;
+          background: linear-gradient(135deg, #7c5cff, #2fb4ff); }
+
+  /* ---------- checkbox (shared drawing) ---------- */
+  .ck { width: 16px; height: 16px; border-radius: 4px; flex: none; display: inline-grid; place-items: center;
+        border: 1.5px solid currentColor; opacity: .55; font-size: 11px; line-height: 1; }
+  .ck.on, .ck.mixed { opacity: 1; background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ck.on::after { content: "✓"; font-weight: 700; }
+  .ck.mixed::after { content: "–"; font-weight: 800; }
+
+  /* =========================================================
+     A — Guided
+     ========================================================= */
+  .vA { --accent: #5b4dff; --soft: #efedff; background: #fbfbfd; }
+  .vA .titlebar { background: #f1f1f6; color: #555; }
+  .a-body { flex: 1; display: flex; min-height: 0; }
+  .a-rail { width: 250px; flex: none; background: #f4f3fa; border-right: 1px solid #e5e3ef;
+            padding: 26px 18px; display: flex; flex-direction: column; gap: 4px; }
+  .a-brand { font-size: 20px; font-weight: 700; letter-spacing: -.3px; margin: 0 8px 22px; }
+  .a-brand small { display: block; font-size: 12px; font-weight: 400; color: #6a6880; letter-spacing: 0; margin-top: 2px; }
+  .a-step { display: flex; align-items: center; gap: 12px; padding: 10px 10px; border-radius: 10px;
+            border: 0; background: none; text-align: left; color: #8a879c; }
+  .a-step .dot { width: 26px; height: 26px; border-radius: 50%; border: 2px solid currentColor; flex: none;
+                 display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .a-step.reach { color: #3c3a4f; }
+  .a-step.done .dot { background: #3c3a4f; border-color: #3c3a4f; color: #fff; }
+  .a-step.cur { background: #fff; color: var(--accent); box-shadow: 0 1px 3px rgba(40,30,120,.12); font-weight: 600; }
+  .a-step.cur .dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .a-step:disabled { cursor: default; }
+  .a-step .lab small { display: block; font-weight: 400; font-size: 12px; color: #8a879c; }
+  .a-copy { margin-top: auto; font-size: 12px; color: #5f5c74; background: #fff; border: 1px solid #e5e3ef;
+            border-radius: 10px; padding: 12px; line-height: 1.45; }
+  .a-copy b { color: #1f7a4d; }
+  .a-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .a-head { padding: 34px 44px 10px; }
+  .a-head h1 { margin: 0; font-size: 28px; letter-spacing: -.5px; font-weight: 650; }
+  .a-head p { margin: 6px 0 0; color: #66637a; font-size: 15px; }
+  .a-content { flex: 1; overflow: auto; padding: 18px 44px 24px; }
+  .a-foot { flex: none; display: flex; align-items: center; gap: 14px; padding: 14px 44px;
+            border-top: 1px solid #ecebf3; background: #fff; }
+  .a-foot .sum { flex: 1; color: #66637a; font-size: 13px; }
+  .btn { border: 1px solid #d9d7e6; background: #fff; border-radius: 8px; padding: 8px 16px; }
+  .btn:hover { background: #f6f5fb; }
+  .btn.pri { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.pri:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .45; cursor: default; filter: none; }
+  .btn.big { padding: 12px 26px; font-size: 16px; border-radius: 10px; }
+  .btn.danger { color: #b3261e; border-color: #f0c8c5; }
+  .a-drop { border: 2px dashed #c9c4f2; border-radius: 16px; background: var(--soft); padding: 36px;
+            display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; cursor: pointer; width: 100%; }
+  .a-drop:hover { border-color: var(--accent); }
+  .a-drop .ic { font-size: 34px; }
+  .a-drop b { font-size: 17px; }
+  .a-drop span { color: #6a6880; font-size: 13px; }
+  .a-files { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .a-file { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: #fff;
+            border: 1px solid #e7e5f0; border-radius: 12px; }
+  .a-file .fi { width: 38px; height: 46px; border-radius: 6px; background: #e8e5ff; color: var(--accent);
+                display: grid; place-items: center; font-weight: 800; font-size: 11px; flex: none; }
+  .a-file .meta { flex: 1; min-width: 0; }
+  .a-file .meta b { display: block; }
+  .a-file .meta span { color: #77748a; font-size: 12.5px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+          padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
+  .chip.ok { background: #e3f5ea; color: #1f7a4d; }
+  .chip.warn { background: #fff1d6; color: #8a5300; }
+  .chip.no { background: #eeeef2; color: #65657a; }
+  .chip.run { background: var(--soft); color: var(--accent); }
+  .chip.bad { background: #fde7e5; color: #b3261e; }
+  .x { border: 0; background: none; color: #9a97ab; font-size: 18px; padding: 2px 6px; border-radius: 6px; }
+  .x:hover { background: #f0eff5; color: #333; }
+  .a-hint { margin-top: 18px; font-size: 13px; color: #6a6880; }
+  .a-hint code { background: #efeef5; padding: 2px 6px; border-radius: 5px; }
+  .a-split { display: grid; grid-template-columns: 1fr 300px; gap: 26px; align-items: start; }
+  .a-pills { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .a-pill { border: 1px solid #dddbe9; background: #fff; border-radius: 99px; padding: 6px 14px; font-size: 13px; }
+  .a-pill.on { background: #2b2940; color: #fff; border-color: #2b2940; }
+  .a-tree { background: #fff; border: 1px solid #e7e5f0; border-radius: 12px; padding: 6px; }
+  .a-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; }
+  .a-row:hover { background: #f6f5fb; }
+  .a-row .tw { width: 16px; color: #8a879c; border: 0; background: none; padding: 0; font-size: 11px; }
+  .a-row .nm { flex: 1; }
+  .a-row .cnt { color: #3c3a4f; font-weight: 600; min-width: 64px; text-align: right; }
+  .a-row .sz { color: #8a879c; min-width: 70px; text-align: right; font-size: 12.5px; }
+  .a-row.off .nm, .a-row.off .cnt { color: #a9a6b8; text-decoration: line-through; text-decoration-color: #d0cedb; }
+  .a-card { background: #fff; border: 1px solid #e7e5f0; border-radius: 14px; padding: 18px 20px; }
+  .a-card + .a-card { margin-top: 14px; }
+  .a-card h3 { margin: 0 0 4px; font-size: 15px; }
+  .a-card p { margin: 0; color: #66637a; font-size: 13px; line-height: 1.5; }
+  .a-big { font-size: 34px; font-weight: 700; letter-spacing: -1px; margin: 4px 0 0; }
+  .a-big small { font-size: 14px; font-weight: 500; color: #77748a; letter-spacing: 0; }
+  .linkbtn { border: 0; background: none; color: var(--accent); padding: 0; font-weight: 600; }
+  .a-field { display: flex; gap: 8px; margin-top: 10px; }
+  .a-field .path { flex: 1; border: 1px solid #dddbe9; border-radius: 8px; padding: 9px 12px; background: #fafafd;
+                   font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; }
+  .toggle { width: 42px; height: 24px; border-radius: 99px; border: 0; background: #cfcddc; position: relative; flex: none; padding: 0; }
+  .toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .toggle.on { background: var(--accent); }
+  .toggle.on::after { left: 21px; }
+  .a-tgl { display: flex; align-items: center; gap: 14px; }
+  .a-tgl > div { flex: 1; }
+  .seg { display: inline-flex; border: 1px solid #dddbe9; border-radius: 9px; overflow: hidden; margin-top: 12px; }
+  .seg button { border: 0; background: #fff; padding: 7px 14px; border-right: 1px solid #dddbe9; }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: #2b2940; color: #fff; }
+  .a-parts { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .a-part { width: 118px; padding: 12px; border-radius: 10px; background: #f6f5fb; border: 1px solid #e7e5f0; font-size: 12px; }
+  .a-part b { display: block; font-size: 18px; margin-top: 4px; }
+  .note { border-radius: 12px; padding: 14px 16px; font-size: 13px; line-height: 1.5; display: flex; gap: 12px; }
+  .note .ni { font-size: 18px; line-height: 1.1; }
+  .note.warn { background: #fff6e3; color: #6b4300; border: 1px solid #f5dfaa; }
+  .note.info { background: #eef4ff; color: #1d3f78; border: 1px solid #d3e1fb; }
+  .note.ok { background: #eaf7ef; color: #185c3a; border: 1px solid #c8ead5; }
+  .note b { display: block; margin-bottom: 2px; }
+  .a-run { text-align: center; padding: 10px 0 20px; }
+  .a-pct { font-size: 64px; font-weight: 700; letter-spacing: -2px; }
+  .a-runsub { color: #66637a; margin-top: -4px; }
+  .bar { height: 8px; border-radius: 99px; background: #e9e7f3; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .1s linear; }
+  .a-runrows { display: flex; flex-direction: column; gap: 10px; max-width: 720px; margin: 22px auto 0; }
+  .a-runrow { background: #fff; border: 1px solid #e7e5f0; border-radius: 12px; padding: 14px 16px; }
+  .a-runrow .top { display: flex; justify-content: space-between; margin-bottom: 8px; gap: 10px; }
+  .a-runrow .top span { color: #77748a; font-size: 12.5px; }
+  .a-rep { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .a-rep .full { grid-column: 1 / -1; }
+  .a-kv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .a-kv div { background: #f6f5fb; border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #77748a; }
+  .a-kv b { display: block; font-size: 20px; color: #1b1b1f; }
+  .a-list { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; }
+  .a-list li { padding: 8px 0; border-top: 1px solid #f0eff5; display: flex; gap: 10px; }
+  .a-list li span { color: #77748a; }
+
+  /* =========================================================
+     B — Workbench (dark, dense)
+     ========================================================= */
+  .vB { --accent: #2bc4b0; --bg: #17191d; --panel: #1e2126; --line: #2c3037; --mut: #8b929e; --txt: #e3e6ea;
+        background: var(--bg); color: var(--txt); font-size: 13px; }
+  .vB .titlebar { background: #121417; color: #9aa1ac; }
+  .vB .mono { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+  .b-tool { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .b-btn { border: 1px solid transparent; background: none; color: var(--txt); padding: 6px 10px; border-radius: 6px; display: inline-flex; gap: 6px; align-items: center; }
+  .b-btn:hover { background: #2a2e35; }
+  .b-btn.pri { background: var(--accent); color: #062b26; font-weight: 600; }
+  .b-btn.pri:hover { filter: brightness(1.1); }
+  .b-btn.stop { color: #ff8a80; border-color: #5a2f2c; }
+  .b-btn:disabled { opacity: .35; cursor: default; background: none; filter: none; }
+  .b-btn.pri:disabled { background: var(--accent); }
+  .b-sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
+  .b-out { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--mut); }
+  .b-out .val { color: var(--txt); background: #14161a; border: 1px solid var(--line); padding: 4px 8px; border-radius: 5px; }
+  .b-main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 470px; min-height: 0; }
+  .b-left { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  .b-cap { padding: 10px 14px 6px; color: var(--mut); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; display: flex; justify-content: space-between; }
+  .b-table { width: 100%; border-collapse: collapse; }
+  .b-table th { text-align: left; font-weight: 500; color: var(--mut); font-size: 11.5px; padding: 6px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); }
+  .b-table td { padding: 9px 10px; border-bottom: 1px solid #22262c; white-space: nowrap; }
+  .b-table tr.r { cursor: pointer; }
+  .b-table tr.r:hover td { background: #1d2025; }
+  .b-table tr.sel td { background: #1c2a2a; }
+  .b-table tr.sel td:first-child { box-shadow: inset 3px 0 var(--accent); }
+  .b-table td.rt, .b-table th.rt { text-align: right; }
+  .sd { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; vertical-align: 1px; }
+  .sd.ready { background: #4caf50; } .sd.locked { background: #f5b942; } .sd.unsupported { background: #6b717c; }
+  .sd.running { background: var(--accent); box-shadow: 0 0 0 3px rgba(43,196,176,.25); }
+  .sd.done { background: #7aa7ff; } .sd.cancelled, .sd.skipped { background: #ff8a80; }
+  .b-mini { width: 90px; height: 4px; background: #2c3037; border-radius: 2px; overflow: hidden; display: inline-block; vertical-align: middle; }
+  .b-mini i { display: block; height: 100%; background: var(--accent); }
+  .b-empty { flex: 1; display: grid; place-items: center; text-align: center; color: var(--mut); padding: 30px; }
+  .b-empty b { color: var(--txt); font-size: 15px; display: block; margin-bottom: 6px; }
+  .b-empty .k { display: inline-block; border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; font-size: 11px; color: var(--txt); }
+  .b-scroll { flex: 1; overflow: auto; }
+  .b-log { flex: none; height: 128px; border-top: 1px solid var(--line); background: #131518; overflow: auto; padding: 8px 14px; color: #9aa1ac; line-height: 1.6; }
+  .b-log .ts { color: #5c636e; margin-right: 8px; }
+  .b-right { display: flex; flex-direction: column; min-width: 0; background: var(--panel); }
+  .b-ins-h { padding: 14px 16px 0; }
+  .b-ins-h b { font-size: 15px; display: block; overflow: hidden; text-overflow: ellipsis; }
+  .b-ins-h span { color: var(--mut); font-size: 12px; }
+  .b-tabs { display: flex; gap: 2px; padding: 12px 12px 0; border-bottom: 1px solid var(--line); }
+  .b-tab { border: 0; background: none; color: var(--mut); padding: 8px 12px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .b-tab.on { color: var(--txt); border-bottom-color: var(--accent); }
+  .b-tab .badge { background: #2c3037; color: var(--txt); border-radius: 8px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+  .b-pane { flex: 1; overflow: auto; padding: 10px 12px 16px; }
+  .b-tree-h { display: flex; color: var(--mut); font-size: 11px; padding: 4px 8px; text-transform: uppercase; letter-spacing: .6px; }
+  .b-tree-h .s { margin-left: auto; display: flex; gap: 0; }
+  .b-tree-h .s span, .b-trow .c, .b-trow .z { width: 72px; text-align: right; }
+  .b-trow { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px; }
+  .b-trow:hover { background: #262a30; }
+  .b-trow .tw { width: 14px; border: 0; background: none; color: var(--mut); padding: 0; font-size: 10px; }
+  .b-trow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .b-trow .c { color: var(--txt); } .b-trow .z { color: var(--mut); }
+  .b-trow.off .nm, .b-trow.off .c { color: #5f6570; }
+  .vB .ck { color: #8b929e; width: 14px; height: 14px; font-size: 10px; border-radius: 3px; }
+  .vB .ck.on, .vB .ck.mixed { color: #062b26; }
+  .b-tot { margin-top: 8px; padding: 8px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; color: var(--mut); }
+  .b-tot b { color: var(--txt); }
+  .b-sec { margin-bottom: 16px; }
+  .b-sec h4 { margin: 4px 0 8px; font-size: 11px; color: var(--mut); text-transform: uppercase; letter-spacing: .7px; font-weight: 500; }
+  .b-kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; }
+  .b-kv dt { color: var(--mut); } .b-kv dd { margin: 0; }
+  .b-in { background: #14161a; border: 1px solid var(--line); color: var(--txt); border-radius: 5px; padding: 4px 8px; width: 70px; }
+  .b-note { border-left: 3px solid #f5b942; background: #26231b; padding: 8px 10px; border-radius: 0 6px 6px 0; color: #e9d8a8; line-height: 1.5; margin-top: 8px; }
+  .b-note.info { border-left-color: #7aa7ff; background: #1c2230; color: #c7d6f5; }
+  .b-note.ok { border-left-color: #4caf50; background: #1b261e; color: #bfe3c4; }
+  .b-files { width: 100%; border-collapse: collapse; }
+  .b-files td { padding: 5px 4px; border-bottom: 1px solid #2a2e35; }
+  .b-status { flex: none; height: 28px; display: flex; align-items: center; gap: 14px; padding: 0 12px; background: #0f1113; color: #9aa1ac; font-size: 12px; border-top: 1px solid var(--line); }
+  .b-status .sp { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .b-status .b-mini { width: 160px; }
+  .vB .sw { width: 30px; height: 16px; border-radius: 99px; border: 0; background: #3a3f47; position: relative; padding: 0; vertical-align: middle; }
+  .vB .sw::after { content: ""; position: absolute; width: 12px; height: 12px; border-radius: 50%; top: 2px; left: 2px; background: #cfd3d9; transition: left .12s; }
+  .vB .sw.on { background: var(--accent); } .vB .sw.on::after { left: 16px; background: #062b26; }
+
+  /* =========================================================
+     C — Flow (warm, editorial, one surface)
+     ========================================================= */
+  .vC { --accent: #ff5a1f; --ink: #18120e; --paper: #f6f1e9; --card: #fffdf9; --rule: #e4dccf; --mut: #7c7064;
+        background: var(--paper); color: var(--ink); }
+  .vC .titlebar { background: var(--paper); color: var(--mut); border-bottom: 1px solid var(--rule); }
+  .c-head { flex: none; display: flex; align-items: baseline; gap: 18px; padding: 20px 30px 12px; }
+  .c-head h1 { margin: 0; font-size: 34px; letter-spacing: -1.2px; font-weight: 800; }
+  .c-head p { margin: 0; color: var(--mut); flex: 1; }
+  .c-mode { border: 1.5px solid var(--ink); border-radius: 99px; padding: 4px 12px; font-size: 12px; font-weight: 700; }
+  .c-cols { flex: 1; display: grid; grid-template-columns: 1fr 34px 1.25fr 34px 1fr; padding: 4px 30px 0; min-height: 0; }
+  .c-col { display: flex; flex-direction: column; min-height: 0; }
+  .c-col > h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 2px; font-weight: 800; display: flex; gap: 10px; align-items: center; }
+  .c-col > h2 em { font-style: normal; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-size: 12px; letter-spacing: 0; }
+  .c-scroll { flex: 1; overflow: auto; padding-bottom: 14px; padding-right: 4px; }
+  .c-arrow { display: grid; place-items: center; color: #c7bba9; font-size: 22px; }
+  .c-ost { background: var(--card); border: 1.5px solid var(--rule); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px;
+           cursor: pointer; display: block; width: 100%; text-align: left; position: relative; }
+  .c-ost:hover { border-color: #cdbfac; }
+  .c-ost.sel { border-color: var(--ink); box-shadow: 4px 4px 0 var(--ink); }
+  .c-ost b { display: block; font-size: 15px; overflow-wrap: anywhere; padding-right: 22px; }
+  .c-ost .sub { color: var(--mut); font-size: 12px; margin-top: 3px; }
+  .c-ost .st { margin-top: 10px; font-size: 12.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .c-ost .rm { position: absolute; top: 8px; right: 8px; }
+  .c-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .c-add { width: 100%; border: 2px dashed #d3c6b3; background: none; border-radius: 14px; padding: 22px 14px; text-align: center; color: var(--mut); }
+  .c-add:hover { border-color: var(--ink); color: var(--ink); }
+  .c-add b { display: block; color: var(--ink); font-size: 16px; }
+  .c-what { background: var(--card); border: 1.5px solid var(--rule); border-radius: 14px; padding: 6px 4px; }
+  .c-frow { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid #f0e9de; }
+  .c-frow:last-child { border-bottom: 0; }
+  .c-frow .tw { width: 14px; border: 0; background: none; color: var(--mut); padding: 0; font-size: 11px; }
+  .c-frow .nm { flex: 1; font-weight: 600; }
+  .c-frow.kid .nm { font-weight: 400; }
+  .c-frow .cnt { font-size: 20px; font-weight: 800; letter-spacing: -.5px; }
+  .c-frow.kid .cnt { font-size: 15px; font-weight: 700; }
+  .c-frow .sz { color: var(--mut); font-size: 12px; width: 58px; text-align: right; }
+  .c-frow.off .nm, .c-frow.off .cnt { color: #c3b8a8; }
+  .c-sw { width: 36px; height: 20px; border-radius: 99px; border: 0; background: #d9cfc0; position: relative; padding: 0; flex: none; }
+  .c-sw::after { content: ""; position: absolute; width: 14px; height: 14px; top: 3px; left: 3px; border-radius: 50%; background: #fff; transition: left .12s; }
+  .c-sw.on { background: var(--ink); } .c-sw.on::after { left: 19px; }
+  .c-sw.mixed { background: #8a7c6c; } .c-sw.mixed::after { left: 11px; }
+  .c-tot { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 6px 0; }
+  .c-tot b { font-size: 26px; letter-spacing: -1px; }
+  .c-tot span { color: var(--mut); }
+  .c-to { background: var(--card); border: 1.5px solid var(--rule); border-radius: 14px; padding: 16px; }
+  .c-to + .c-to { margin-top: 10px; }
+  .c-lab { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--mut); font-weight: 700; }
+  .c-path { font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; margin: 6px 0 8px; overflow-wrap: anywhere; }
+  .c-ln { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 700; }
+  .c-splitrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .c-splitrow b { font-size: 15px; }
+  .c-range { width: 100%; accent-color: var(--ink); margin-top: 10px; }
+  .c-stack { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+  .c-pst { display: flex; align-items: center; gap: 10px; background: #f3ece1; border-radius: 9px; padding: 8px 10px; font-size: 12.5px; }
+  .c-pst i { width: 22px; height: 26px; background: var(--ink); color: var(--paper); border-radius: 3px; font-style: normal; font-size: 8px; font-weight: 800; display: grid; place-items: center; flex: none; }
+  .c-pst span { flex: 1; overflow-wrap: anywhere; }
+  .c-pst em { font-style: normal; color: var(--mut); white-space: nowrap; }
+  .c-warn { background: #ffe9dc; color: #7a2a06; border-radius: 10px; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; margin-top: 10px; }
+  .c-warn b { display: block; }
+  .c-go { flex: none; margin: 8px 30px 22px; height: 66px; border-radius: 16px; border: 0; background: var(--ink); color: var(--paper);
+          position: relative; overflow: hidden; display: flex; align-items: center; padding: 0 26px; font-size: 19px; font-weight: 800; letter-spacing: -.3px; text-align: left; }
+  .c-go:disabled { background: #d9cfc0; color: #8a7c6c; cursor: default; }
+  .c-go .fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); transition: width .12s linear; }
+  .c-go .lbl { position: relative; flex: 1; display: flex; align-items: baseline; gap: 14px; }
+  .c-go .lbl small { font-size: 13px; font-weight: 600; opacity: .85; letter-spacing: 0; }
+  .c-go .cancel { position: relative; background: rgba(0,0,0,.25); color: #fff; border: 1px solid rgba(255,255,255,.4); border-radius: 10px; padding: 8px 16px; font-size: 14px; font-weight: 700; }
+  .c-go .arrow { position: relative; font-size: 26px; }
+  .c-sheet-bg { position: absolute; inset: 0; background: rgba(24,18,14,.35); }
+  .c-sheet { position: absolute; top: 0; right: 0; bottom: 0; width: 470px; background: var(--card); box-shadow: -20px 0 60px rgba(0,0,0,.25);
+             display: flex; flex-direction: column; animation: slidein .25s ease-out; }
+  @keyframes slidein { from { transform: translateX(40px); opacity: 0; } }
+  .c-sheet .sh { padding: 22px 26px 10px; border-bottom: 2px dashed var(--rule); }
+  .c-sheet .sh h2 { margin: 0; font-size: 26px; letter-spacing: -1px; font-weight: 800; }
+  .c-sheet .sh p { margin: 4px 0 0; color: var(--mut); }
+  .c-sheet .sb { flex: 1; overflow: auto; padding: 8px 26px 20px; }
+  .c-sheet .sf { padding: 14px 26px; border-top: 2px dashed var(--rule); display: flex; gap: 10px; }
+  .c-rc { padding: 14px 0; border-bottom: 1px dashed var(--rule); }
+  .c-rc h3 { margin: 0 0 8px; font-size: 15px; display: flex; justify-content: space-between; gap: 10px; }
+  .c-line { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; gap: 10px; }
+  .c-line span:first-child { color: var(--mut); }
+  .c-q { background: #f3ece1; border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.5; margin-top: 10px; }
+  .c-q b { display: block; font-size: 14px; }
+  .c-btn { border: 1.5px solid var(--ink); background: none; border-radius: 10px; padding: 9px 16px; font-weight: 700; }
+  .c-btn.pri { background: var(--ink); color: var(--paper); }
+  .c-btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+  .c-empty { color: var(--mut); padding: 30px 10px; text-align: center; line-height: 1.5; }
+  .c-empty b { display: block; color: var(--ink); font-size: 16px; }
+
+  /* ---------- modal + toast (shared) ---------- */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: grid; place-items: center; z-index: 50; }
+  .modal { width: 420px; background: #fff; color: #1b1b1f; border-radius: 12px; padding: 22px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+  .modal h3 { margin: 0 0 8px; font-size: 18px; }
+  .modal p { margin: 0 0 18px; color: #555; line-height: 1.5; }
+  .modal .acts { display: flex; justify-content: flex-end; gap: 8px; }
+  .toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); background: #111; color: #fff; padding: 9px 16px; border-radius: 8px; font-size: 13px; z-index: 60; }
+
+  /* ---------- prototype switcher (not part of any design) ---------- */
+  .proto-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 100;
+               display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 99px;
+               background: #ffe14d; color: #111; box-shadow: 0 6px 24px rgba(0,0,0,.4), 0 0 0 2px #111;
+               font: 600 13px/1 ui-monospace, Consolas, monospace; }
+  .proto-bar button { border: 0; background: #111; color: #ffe14d; width: 32px; height: 32px; border-radius: 50%; font-size: 15px; }
+  .proto-bar .lbl { padding: 0 12px; min-width: 190px; text-align: center; }
+  .proto-bar .st { width: auto; border-radius: 99px; padding: 0 12px; font-size: 12px; }
+  .proto-state { position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%); width: min(760px, 92vw); max-height: 42vh; overflow: auto;
+                 background: #111; color: #c8f7c5; font: 11.5px/1.45 ui-monospace, Consolas, monospace; padding: 12px 14px; border-radius: 10px;
+                 box-shadow: 0 0 0 2px #ffe14d; z-index: 99; white-space: pre; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ===================== fake data ===================== */
+let nid = 0;
+const mk = arr => arr.map(([name, count, mb, kids]) =>
+  ({ id: 'n' + (++nid), name, count, mb, checked: true, kids: kids ? mk(kids) : [] }));
+
+const POOL = [
+  () => ({
+    id: 's1', name: 'mrivera@northwind.example.ost', status: 'ready',
+    path: 'C:\\Users\\mrivera\\AppData\\Local\\Microsoft\\Outlook\\',
+    format: 'Unicode OST, 4 KB pages (Outlook 2013 and later)',
+    modified: 'Oct 3, 2026', headersOnly: 1206,
+    tree: mk([
+      ['Inbox', 18204, 21400, [['Clients', 3120, 6100], ['Invoices', 1840, 2200], ['Newsletters', 6410, 3900]]],
+      ['Sent Items', 7925, 9800],
+      ['Calendar', 1433, 600],
+      ['Contacts', 812, 110],
+      ['Tasks', 96, 12],
+      ['Notes', 41, 3],
+      ['Archive', 0, 0, [['2022', 4100, 5000], ['2023', 5760, 7600]]],
+      ['Deleted Items', 2310, 1900],
+      ['Junk Email', 377, 210],
+      ['Sync Issues', 0, 0, [['Conflicts', 12, 4], ['Local Failures', 46, 18]]],
+    ]),
+    skipped: [
+      { folder: 'Newsletters', what: 'Message "Weekly digest #212"', why: 'Its data block is damaged and could not be read.' },
+      { folder: '2022', what: 'Message "RE: Q3 contract"', why: 'Its attachment list could not be read.' },
+      { folder: 'Calendar', what: 'Appointment "Team sync" (recurring)', why: 'Its recurrence data is damaged.' },
+    ],
+  }),
+  () => ({
+    id: 's2', name: 'shared-accounts.ost', status: 'locked',
+    path: 'C:\\Users\\mrivera\\AppData\\Local\\Microsoft\\Outlook\\',
+    format: 'Unicode OST, 4 KB pages (Outlook 2013 and later)',
+    modified: 'Today, 9:41 AM', headersOnly: 0,
+    tree: mk([
+      ['Inbox', 2104, 3100, [['Receipts', 690, 410]]],
+      ['Sent Items', 640, 1200],
+      ['Calendar', 210, 60],
+      ['Contacts', 45, 5],
+      ['Deleted Items', 300, 620],
+    ]),
+    skipped: [],
+  }),
+  () => ({
+    id: 's3', name: 'old-laptop-2009.ost', status: 'unsupported',
+    path: 'E:\\Backups\\old-laptop\\Outlook\\',
+    format: 'ANSI OST (Outlook 2002 and earlier)',
+    modified: 'Mar 14, 2009', headersOnly: 0, tree: [], skipped: [],
+  }),
+];
+
+/* ===================== state ===================== */
+const VARIANTS = [['A', 'Guided'], ['B', 'Workbench'], ['C', 'Flow']];
+const DIRS = ['D:\\Mail exports', 'C:\\Users\\mrivera\\Documents\\Outlook PSTs', 'E:\\Archive'];
+const S = {
+  variant: (new URLSearchParams(location.search).get('variant') || 'A').toUpperCase(),
+  sources: [], sel: null,
+  out: { dir: DIRS[0], split: false, gib: 20 },
+  run: { phase: 'idle', queue: [], idx: 0, prog: {}, reports: {} },
+  step: 1, tab: 'folders', sheet: false, open: new Set(),
+  modal: null, toast: null, showState: false, log: [],
+};
+if (!VARIANTS.some(v => v[0] === S.variant)) S.variant = 'A';
+let timer = null, toastT = null;
+
+/* ===================== helpers ===================== */
+const $n = n => n.toLocaleString('en-US');
+const gb = mb => (mb / 1024).toFixed(1) + ' GB';
+const mbFmt = mb => mb >= 1024 ? gb(mb) : (mb < 1 ? '<1 MB' : Math.round(mb) + ' MB');
+const src = id => S.sources.find(s => s.id === id);
+const cur = () => src(S.sel);
+const walk = (nodes, fn, d = 0) => nodes.forEach(n => { fn(n, d); walk(n.kids, fn, d + 1); });
+const flags = n => [n.checked, ...n.kids.flatMap(flags)];
+const nstate = n => { const f = flags(n); return f.every(Boolean) ? 'on' : f.some(Boolean) ? 'mixed' : 'off'; };
+const setAll = (n, v) => { n.checked = v; n.kids.forEach(k => setAll(k, v)); };
+const findNode = (s, id) => { let r = null; walk(s.tree, n => { if (n.id === id) r = n; }); return r; };
+const srcMb = s => { let m = 0; walk(s.tree, n => m += n.mb); return s.status === 'unsupported' ? 2460 : m * 1.03; };
+function totals(s) {
+  let items = 0, mb = 0, folders = 0, all = 0;
+  walk(s.tree, n => { all++; if (n.checked) { items += n.count; mb += n.mb; folders++; } });
+  return { items, mb, folders, all };
+}
+const convertible = () => S.sources.filter(s => s.status === 'ready' && totals(s).items > 0);
+function parts(s) {
+  const g = totals(s).mb / 1024, base = s.name.replace(/\.ost$/i, '');
+  const n = S.out.split ? Math.max(1, Math.ceil(g / S.out.gib)) : 1;
+  return Array.from({ length: n }, (_, i) => ({
+    name: n > 1 ? `${base} (part ${i + 1} of ${n}).pst` : `${base}.pst`,
+    gb: n > 1 ? Math.min(S.out.gib, g - i * S.out.gib) : g,
+  }));
+}
+const overLimit = s => !S.out.split && totals(s).mb / 1024 > 50;
+const totalParts = () => convertible().reduce((a, s) => a + parts(s).length, 0);
+const running = () => S.run.phase === 'running';
+const finished = () => S.run.phase === 'done' || S.run.phase === 'cancelled';
+function visibleRows(s) {
+  const rows = [];
+  const go = (nodes, d) => nodes.forEach(n => {
+    const open = S.open.has(s.id + ':' + n.id);
+    rows.push({ n, d, kids: n.kids.length > 0, open });
+    if (open) go(n.kids, d + 1);
+  });
+  go(s.tree, 0);
+  return rows;
+}
+function currentFolder(s, done) {
+  let acc = 0, name = '';
+  walk(s.tree, n => { if (!n.checked || name) return; acc += n.count; if (acc >= done) name = n.name; });
+  return name || 'Finishing up';
+}
+const etaText = (s, done) => {
+  const left = (totals(s).items - done) / 140; // fake items per second
+  return left < 60 ? 'less than a minute left' : `about ${Math.ceil(left / 60)} min left`;
+};
+function log(msg) { const t = new Date().toTimeString().slice(0, 8); S.log.push([t, msg]); if (S.log.length > 60) S.log.shift(); }
+function toast(msg) { S.toast = msg; clearTimeout(toastT); toastT = setTimeout(() => { S.toast = null; render(); }, 2200); render(); }
+
+/* ===================== actions ===================== */
+function addNext() {
+  const next = POOL.map(f => f()).find(p => !src(p.id));
+  if (!next) return toast('Prototype: no more sample OSTs to add');
+  next.tree.forEach(n => { if (n.name === 'Inbox') S.open.add(next.id + ':' + n.id); });
+  S.sources.push(next);
+  if (!S.sel || src(S.sel)?.status !== 'ready') S.sel = next.id;
+  log(`Opened ${next.name} read-only — ${next.status === 'ready' ? 'folders loaded' : next.status === 'locked' ? 'file is in use by Outlook' : 'format not supported in this version'}`);
+  render();
+}
+const A = {
+  add: addNext,
+  addAll: () => { for (let i = 0; i < 3; i++) if (!S.sources.find(s => s.id === 's' + (i + 1))) addNext(); },
+  remove: d => { S.sources = S.sources.filter(s => s.id !== d.id); if (S.sel === d.id) S.sel = S.sources[0]?.id || null; render(); },
+  retry: d => { const s = src(d.id); s.status = 'ready'; S.sel = s.id; log(`Outlook closed — ${s.name} opened read-only, folders loaded`); toast('Outlook is closed now — folders loaded'); },
+  sel: d => { S.sel = d.id; render(); },
+  tog: d => { if (running()) return; const s = src(d.s), n = findNode(s, d.n); setAll(n, nstate(n) !== 'on'); render(); },
+  open: d => { const k = d.s + ':' + d.n; S.open.has(k) ? S.open.delete(k) : S.open.add(k); render(); },
+  all: d => { if (running()) return; src(d.s).tree.forEach(n => setAll(n, d.v === '1')); render(); },
+  step: d => { S.step = +d.n; render(); },
+  next: () => { S.step = Math.min(5, S.step + 1); render(); },
+  back: () => { S.step = Math.max(1, S.step - 1); render(); },
+  split: () => { S.out.split = !S.out.split; render(); },
+  gib: d => { S.out.gib = +d.v; render(); },
+  dir: () => { S.out.dir = DIRS[(DIRS.indexOf(S.out.dir) + 1) % DIRS.length]; toast('Prototype: the Windows folder picker opens here'); },
+  tab: d => { S.tab = d.t; render(); },
+  start,
+  cancel: () => { S.modal = 'cancel'; render(); },
+  cancelNo: () => { S.modal = null; render(); },
+  cancelYes,
+  sheet: d => { S.sheet = d.v === '1'; render(); },
+  again: () => { S.run = { phase: 'idle', queue: [], idx: 0, prog: {}, reports: {} }; S.step = 3; S.sheet = false; S.tab = 'folders'; render(); },
+  fresh: () => { S.sources = []; S.sel = null; S.run = { phase: 'idle', queue: [], idx: 0, prog: {}, reports: {} }; S.step = 1; S.sheet = false; S.tab = 'folders'; render(); },
+  openFolder: () => toast('Prototype: opens the output folder in File Explorer'),
+  saveReport: () => toast('Prototype: saves the conversion report as a file'),
+  vprev: () => cycle(-1), vnext: () => cycle(1),
+  state: () => { S.showState = !S.showState; render(); },
+};
+function start() {
+  const q = convertible().map(s => s.id);
+  if (!q.length || running()) return;
+  S.run = { phase: 'running', queue: q, idx: 0, prog: {}, reports: {}, t0: Date.now() };
+  q.forEach(id => S.run.prog[id] = { done: 0, total: totals(src(id)).items, state: 'waiting' });
+  S.run.prog[q[0]].state = 'running';
+  log(`Conversion started: ${q.length} OST${q.length > 1 ? 's' : ''} → ${totalParts()} PST${totalParts() > 1 ? 's' : ''} in ${S.out.dir}`);
+  S.step = 4; S.tab = 'folders';
+  timer = setInterval(tick, 110);
+  render();
+}
+function tick() {
+  const r = S.run, id = r.queue[r.idx], p = r.prog[id];
+  const before = currentFolder(src(id), p.done);
+  p.done = Math.min(p.total, p.done + Math.ceil(p.total / 70));
+  const after = currentFolder(src(id), p.done);
+  if (after !== before) log(`${src(id).name}: copying ${after}`);
+  if (p.done >= p.total) {
+    p.state = 'done'; r.reports[id] = report(src(id), 'done');
+    log(`${src(id).name}: finished — ${r.reports[id].files.length} PST file(s) written`);
+    r.idx++;
+    if (r.idx >= r.queue.length) return finish('done');
+    r.prog[r.queue[r.idx]].state = 'running';
+  }
+  render();
+}
+function cancelYes() {
+  const r = S.run;
+  r.queue.forEach(id => {
+    const p = r.prog[id];
+    if (p.state === 'running') { p.state = 'cancelled'; r.reports[id] = report(src(id), 'cancelled'); }
+    else if (p.state === 'waiting') { p.state = 'skipped'; r.reports[id] = report(src(id), 'not started'); }
+  });
+  S.modal = null; log('Conversion cancelled by user'); finish('cancelled');
+}
+function finish(phase) {
+  clearInterval(timer); S.run.phase = phase; S.step = 5; S.tab = 'report'; S.sheet = true; render();
+}
+function report(s, status) {
+  const t = totals(s), checkedNames = new Set();
+  walk(s.tree, n => { if (n.checked) checkedNames.add(n.name); });
+  const done = status === 'done';
+  const skipped = done ? s.skipped.filter(k => checkedNames.has(k.folder)) : [];
+  return {
+    status, folders: t.folders, skipped,
+    items: done ? t.items - skipped.length : S.run.prog[s.id].done,
+    files: done ? parts(s) : [], headersOnly: done ? s.headersOnly : 0,
+    mins: Math.max(1, Math.round(t.mb / 150 / 60)),
+  };
+}
+function cycle(d) {
+  const i = VARIANTS.findIndex(v => v[0] === S.variant);
+  S.variant = VARIANTS[(i + d + VARIANTS.length) % VARIANTS.length][0];
+  const u = new URL(location.href); u.searchParams.set('variant', S.variant); history.replaceState(null, '', u);
+  render();
+}
+
+/* ===================== shared copy ===================== */
+const COMPLETENESS = {
+  title: 'Is everything from the mailbox in here? We can’t tell.',
+  body: 'An OST only holds what Outlook downloaded to this computer. Older mail, or folders Outlook was set not to download, may exist only on the server. Before you delete anything from the mailbox, check that the PST holds the dates and folders you expect.',
+};
+const headersOnlyText = n => `${$n(n)} items hold headers only: the sender, subject and date are here, but the message body and attachments were never downloaded to this computer.`;
+const lockedText = 'Outlook has this file open. Close Outlook, then select Retry.';
+const unsupportedText = 'This older OST format isn’t supported in this version, so it won’t be converted.';
+const limitText = s => `This PST would be about ${gb(totals(s).mb)}. Outlook’s default limit for a PST is 50 GB, so a larger file may not open or may stop accepting mail. Turn on Split to stay under it.`;
+const statusChip = s => s.status === 'ready' ? '<span class="chip ok">● Ready</span>'
+  : s.status === 'locked' ? '<span class="chip warn">● In use by Outlook</span>'
+  : '<span class="chip no">● Not supported</span>';
+
+/* =========================================================
+   VARIANT A — Guided
+   ========================================================= */
+const A_STEPS = [
+  ['Add OST files', 'Pick what to convert'],
+  ['Choose folders', 'Untick what you don’t need'],
+  ['Output', 'Where PSTs go, Split'],
+  ['Convert', 'Progress and Cancel'],
+  ['Report', 'What happened'],
+];
+function aReach(i) {
+  if (running()) return i === 4;
+  if (finished()) return i === 5 || i <= 3;
+  if (i === 1) return true;
+  if (i === 2) return S.sources.some(s => s.status === 'ready');
+  if (i === 3 || i === 4) return convertible().length > 0;
+  return false;
+}
+function VariantA() {
+  const st = S.step;
+  const rail = A_STEPS.map(([t, sub], k) => {
+    const i = k + 1, reach = aReach(i);
+    const done = i < st && !(running() && i === 4);
+    return `<button class="a-step ${reach ? 'reach' : ''} ${i === st ? 'cur' : ''} ${done ? 'done' : ''}" ${reach ? `data-act="step" data-n="${i}"` : 'disabled'}>
+      <span class="dot">${done ? '✓' : i}</span><span class="lab">${t}<small>${sub}</small></span></button>`;
+  }).join('');
+  const heads = {
+    1: ['Which OST files do you want to convert?', 'PstOff reads each OST and writes a new PST file from it. Your OST files are never changed.'],
+    2: ['Choose the folders to keep', 'Everything is ticked. Untick folders you don’t want in the PST.'],
+    3: ['Where should the PST files go?', 'One PST per OST. Turn on Split to keep each file under a size you choose.'],
+    4: running() ? ['Converting…', 'You can keep using your computer. Cancel stops the current file.'] : ['Ready to convert', 'Check the summary, then start.'],
+    5: S.run.phase === 'cancelled' ? ['Conversion cancelled', 'Here’s what was finished before you stopped.'] : ['Conversion finished', 'Read this before you rely on the PST files.'],
+  };
+  const body = { 1: aAdd, 2: aFolders, 3: aOutput, 4: aConvert, 5: aReport }[st]();
+  let foot = '';
+  if (st < 4) {
+    const can = aReach(st + 1);
+    const sum = st === 1 ? `${S.sources.filter(s => s.status === 'ready').length} of ${S.sources.length} files ready`
+      : `${convertible().length} OST${convertible().length === 1 ? '' : 's'} · ${$n(convertible().reduce((a, s) => a + totals(s).items, 0))} items · about ${gb(convertible().reduce((a, s) => a + totals(s).mb, 0))}`;
+    foot = `<button class="btn" data-act="back" ${st === 1 ? 'disabled' : ''}>Back</button><div class="sum">${S.sources.length ? sum : ''}</div>
+      <button class="btn pri" data-act="next" ${can ? '' : 'disabled'}>${st === 3 ? 'Review and convert' : 'Next'}</button>`;
+  } else if (st === 4 && !running()) {
+    foot = `<button class="btn" data-act="back">Back</button><div class="sum"></div>`;
+  } else if (st === 4) {
+    foot = `<div class="sum">Converting ${S.run.idx + 1} of ${S.run.queue.length}</div><button class="btn danger" data-act="cancel">Cancel</button>`;
+  } else {
+    foot = `<button class="btn" data-act="fresh">Start over</button><div class="sum"></div>
+      <button class="btn" data-act="saveReport">Save report</button><button class="btn pri" data-act="openFolder">Open output folder</button>`;
+  }
+  return `<div class="win vA">
+    <div class="titlebar"><div class="t"><span class="logo"></span>PstOff</div><div class="wc"><span>—</span><span>☐</span><span>✕</span></div></div>
+    <div class="a-body">
+      <nav class="a-rail"><div class="a-brand">PstOff<small>OST to PST converter</small></div>${rail}
+        <div class="a-copy"><b>Copy mode.</b> PstOff only reads your OST files and writes new PST files. It never changes the OST and never connects to the mailbox.</div></nav>
+      <main class="a-main">
+        <div class="a-head"><h1>${heads[st][0]}</h1><p>${heads[st][1]}</p></div>
+        <section class="a-content">${body}</section>
+        <footer class="a-foot">${foot}</footer>
+      </main>
+    </div></div>`;
+}
+function aAdd() {
+  const files = S.sources.map(s => `<div class="a-file">
+      <div class="fi">OST</div>
+      <div class="meta"><b>${s.name}</b><span>${gb(srcMb(s))} · ${s.format} · modified ${s.modified}</span>
+        ${s.status === 'locked' ? `<div class="note warn" style="margin-top:8px;padding:8px 12px"><span>${lockedText}</span></div>` : ''}
+        ${s.status === 'unsupported' ? `<div style="margin-top:6px;color:#77748a;font-size:12.5px">${unsupportedText}</div>` : ''}</div>
+      ${statusChip(s)}
+      ${s.status === 'locked' ? `<button class="btn" data-act="retry" data-id="${s.id}">Retry</button>` : ''}
+      <button class="x" title="Remove" data-act="remove" data-id="${s.id}">×</button></div>`).join('');
+  return `<button class="a-drop" data-act="add"><span class="ic">⬇</span><b>Drop OST files here</b>
+      <span>or click to browse. You can add several; each becomes its own PST.</span></button>
+    <div class="a-files">${files}</div>
+    <div class="a-hint">Outlook usually keeps OST files in <code>%LOCALAPPDATA%\\Microsoft\\Outlook</code>.
+      ${S.sources.length < 3 ? ` <button class="linkbtn" data-act="addAll">Add all sample files</button>` : ''}</div>`;
+}
+function aFolders() {
+  const ready = S.sources.filter(s => s.status === 'ready');
+  if (!S.sel || src(S.sel)?.status !== 'ready') S.sel = ready[0]?.id;
+  const s = cur();
+  const pills = ready.length > 1 ? `<div class="a-pills">${ready.map(r => `<button class="a-pill ${r.id === s.id ? 'on' : ''}" data-act="sel" data-id="${r.id}">${r.name}</button>`).join('')}</div>` : '';
+  const rows = visibleRows(s).map(({ n, d, kids, open }) => {
+    const st = nstate(n);
+    return `<div class="a-row ${st === 'off' ? 'off' : ''}" style="padding-left:${10 + d * 26}px">
+      <button class="tw" ${kids ? `data-act="open" data-s="${s.id}" data-n="${n.id}"` : 'tabindex="-1"'}>${kids ? (open ? '▾' : '▸') : ''}</button>
+      <span class="ck ${st}" data-act="tog" data-s="${s.id}" data-n="${n.id}" role="checkbox"></span>
+      <span class="nm" data-act="tog" data-s="${s.id}" data-n="${n.id}">${n.name}</span>
+      <span class="cnt num">${n.count ? $n(n.count) : '—'}</span><span class="sz num">${n.mb ? mbFmt(n.mb) : ''}</span></div>`;
+  }).join('');
+  const t = totals(s);
+  return `${pills}<div class="a-split"><div><div class="a-tree">${rows}</div></div>
+    <div><div class="a-card"><h3>Going into the PST</h3><div class="a-big num">${$n(t.items)} <small>items</small></div>
+      <p class="num">${t.folders} of ${t.all} folders · about ${gb(t.mb)}</p>
+      <p style="margin-top:12px"><button class="linkbtn" data-act="all" data-s="${s.id}" data-v="1">Tick all</button> &nbsp;·&nbsp;
+      <button class="linkbtn" data-act="all" data-s="${s.id}" data-v="0">Untick all</button></p></div>
+      <div class="a-card"><h3>Folder structure is kept</h3><p>The PST gets the same folders, in the same places. Unticked folders are left out entirely.</p></div></div></div>`;
+}
+function aOutput() {
+  const list = convertible();
+  const partsHtml = list.map(s => `<div style="margin-top:14px"><b style="font-size:13px">${s.name}</b>
+      <div class="a-parts">${parts(s).map(p => `<div class="a-part">${p.name.length > 30 ? p.name.slice(0, 28) + '…' : p.name}<b class="num">${p.gb.toFixed(1)} GB</b></div>`).join('')}</div>
+      ${overLimit(s) ? `<div class="note warn" style="margin-top:12px"><span class="ni">⚠</span><span><b>This PST would be over Outlook’s size limit</b>${limitText(s)}</span></div>` : ''}</div>`).join('');
+  return `<div class="a-card"><h3>Save PST files to</h3>
+      <div class="a-field"><div class="path">${S.out.dir}</div><button class="btn" data-act="dir">Browse…</button></div></div>
+    <div class="a-card"><div class="a-tgl"><div><h3>Split into smaller PSTs</h3>
+      <p>Each PST stays under the size you pick. Items are never cut in half, and every part keeps the folder layout.</p></div>
+      <button class="toggle ${S.out.split ? 'on' : ''}" data-act="split" aria-label="Split"></button></div>
+      ${S.out.split ? `<div class="seg">${[5, 10, 20, 40].map(v => `<button class="${S.out.gib === v ? 'on' : ''}" data-act="gib" data-v="${v}">${v} GB</button>`).join('')}</div>` : ''}</div>
+    <div class="a-card"><h3>You’ll get ${totalParts()} PST file${totalParts() === 1 ? '' : 's'}</h3><p>Sizes are estimates until the conversion runs.</p>${partsHtml}</div>`;
+}
+function aConvert() {
+  if (!running()) {
+    const list = convertible();
+    return `<div class="a-card"><h3>Summary</h3>
+        <ul class="a-list">${list.map(s => `<li><b style="flex:1">${s.name}</b><span class="num">${$n(totals(s).items)} items → ${parts(s).length} PST${parts(s).length > 1 ? 's' : ''}</span></li>`).join('')}
+        <li><b style="flex:1">Destination</b><span>${S.out.dir}</span></li>
+        <li><b style="flex:1">Split</b><span>${S.out.split ? `on, up to ${S.out.gib} GB per file` : 'off'}</span></li></ul></div>
+      ${list.some(overLimit) ? `<div class="note warn" style="margin-top:14px"><span class="ni">⚠</span><span><b>One PST would be over Outlook’s 50 GB limit.</b> Go back to Output and turn on Split.</span></div>` : ''}
+      ${S.sources.some(s => s.status !== 'ready') ? `<div class="note info" style="margin-top:14px"><span class="ni">ℹ</span><span>${S.sources.filter(s => s.status !== 'ready').length} file(s) will be left out because they’re in use or not supported.</span></div>` : ''}
+      <div style="text-align:center;margin-top:28px"><button class="btn pri big" data-act="start">Start conversion</button></div>`;
+  }
+  const r = S.run, all = r.queue.reduce((a, id) => a + r.prog[id].total, 0), done = r.queue.reduce((a, id) => a + r.prog[id].done, 0);
+  const pct = Math.floor(done / all * 100), id = r.queue[r.idx], p = r.prog[id];
+  return `<div class="a-run"><div class="a-pct num">${pct}%</div>
+      <div class="a-runsub">Copying <b>${currentFolder(src(id), p.done)}</b> from ${src(id).name} · ${etaText(src(id), p.done)}</div>
+      <div class="bar" style="max-width:720px;margin:18px auto 0;height:10px"><i style="width:${pct}%"></i></div>
+      <div class="a-runrows">${r.queue.map(q => { const pp = r.prog[q], pc = Math.floor(pp.done / pp.total * 100);
+        return `<div class="a-runrow"><div class="top"><b>${src(q).name}</b><span class="num">${pp.state === 'waiting' ? 'Waiting' : pp.state === 'done' ? 'Done' : `${$n(pp.done)} of ${$n(pp.total)} items`}</span></div>
+          <div class="bar"><i style="width:${pc}%"></i></div></div>`; }).join('')}</div></div>`;
+}
+function aReport() {
+  const r = S.run;
+  return `<div class="a-rep"><div class="note info full"><span class="ni">?</span><span><b>${COMPLETENESS.title}</b>${COMPLETENESS.body}</span></div>
+    ${r.queue.some(id => r.reports[id].headersOnly) ? `<div class="note warn full"><span class="ni">⚠</span><span><b>Some items were never fully downloaded</b>${r.queue.filter(id => r.reports[id].headersOnly).map(id => `${src(id).name}: ${headersOnlyText(r.reports[id].headersOnly)}`).join('<br>')}</span></div>` : ''}
+    ${r.queue.map(id => { const s = src(id), rep = r.reports[id];
+    const chip = rep.status === 'done' ? (rep.skipped.length ? '<span class="chip warn">Finished with skipped items</span>' : '<span class="chip ok">Finished</span>')
+      : rep.status === 'cancelled' ? '<span class="chip bad">Cancelled, unfinished PST not kept</span>' : '<span class="chip no">Not started</span>';
+    return `<div class="a-card full"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>${s.name}</h3>${chip}</div>
+      ${rep.status === 'done' ? `<div class="a-kv num"><div><b>${$n(rep.items)}</b>items converted</div><div><b>${rep.folders}</b>folders</div><div><b>${rep.skipped.length}</b>skipped items</div></div>
+      <ul class="a-list">${rep.files.map(f => `<li><i class="fg"></i><b style="flex:1">${f.name}</b><span class="num">${f.gb.toFixed(1)} GB</span></li>`).join('')}</ul>
+      ${rep.skipped.length ? `<h3 style="margin-top:16px">Skipped items</h3><p>These couldn’t be read from the OST, so they aren’t in the PST.</p>
+        <ul class="a-list">${rep.skipped.map(k => `<li><b style="flex:1">${k.what}<br><span style="font-weight:400">in ${k.folder}</span></b><span style="max-width:260px">${k.why}</span></li>`).join('')}</ul>` : ''}`
+      : rep.status === 'cancelled' ? `<p style="margin-top:8px">Stopped after ${$n(rep.items)} items. The half-written PST was removed so it can’t be mistaken for a full copy.</p>` : `<p style="margin-top:8px">This file was waiting in the queue when you cancelled.</p>`}
+    </div>`; }).join('')}
+  </div>`;
+}
+
+/* =========================================================
+   VARIANT B — Workbench
+   ========================================================= */
+function VariantB() {
+  const s = cur(), r = S.run;
+  const allItems = r.queue.reduce((a, id) => a + (r.prog[id]?.total || 0), 0), doneItems = r.queue.reduce((a, id) => a + (r.prog[id]?.done || 0), 0);
+  const pct = allItems ? Math.floor(doneItems / allItems * 100) : 0;
+  const rowState = x => r.prog[x.id]?.state || x.status;
+  const rows = S.sources.map(x => {
+    const t = totals(x), p = r.prog[x.id], rs = rowState(x);
+    const label = { ready: 'Ready', locked: 'In use by Outlook', unsupported: 'Not supported', running: 'Converting', done: 'Done', cancelled: 'Cancelled', skipped: 'Not started', waiting: 'Queued' }[rs];
+    return `<tr class="r ${x.id === S.sel ? 'sel' : ''}" data-act="sel" data-id="${x.id}">
+      <td><span class="sd ${rs === 'waiting' ? 'ready' : rs}"></span>${label}</td>
+      <td>${x.name}</td>
+      <td class="rt num mono">${gb(srcMb(x))}</td>
+      <td class="rt num mono">${x.status === 'ready' ? `${$n(t.items)}` : '—'}</td>
+      <td class="rt num mono">${x.status === 'ready' ? (p && p.state !== 'waiting' ? `<span class="b-mini"><i style="width:${Math.floor(p.done / p.total * 100)}%"></i></span>` : parts(x).length + ' PST') : '—'}</td></tr>`;
+  }).join('');
+  const left = S.sources.length ? `<div class="b-cap"><span>Queue · ${S.sources.length} file${S.sources.length > 1 ? 's' : ''}</span><span>${convertible().length} convertible</span></div>
+      <div class="b-scroll"><table class="b-table"><thead><tr><th>Status</th><th>OST file</th><th class="rt">Size</th><th class="rt">Selected items</th><th class="rt">Output</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : `<div class="b-empty"><div><b>No OST files in the queue</b>Drag OST files onto this window, or use Add OST <span class="k">Ctrl+O</span>.<br><br>
+        <button class="b-btn pri" data-act="add">+ Add OST…</button> <button class="b-btn" data-act="addAll">Add all samples</button></div></div>`;
+  const logHtml = S.log.slice().reverse().map(([t, m]) => `<div><span class="ts mono">${t}</span>${m}</div>`).join('') || '<div style="color:#5c636e">Activity appears here.</div>';
+  return `<div class="win vB">
+    <div class="titlebar"><div class="t"><span class="logo"></span>PstOff</div><div class="wc"><span>—</span><span>☐</span><span>✕</span></div></div>
+    <div class="b-tool">
+      <button class="b-btn" data-act="add" ${running() ? 'disabled' : ''}>+ Add OST…</button>
+      <button class="b-btn" ${s && !running() ? `data-act="remove" data-id="${s.id}"` : 'disabled'}>Remove</button>
+      <div class="b-sep"></div>
+      <button class="b-btn pri" data-act="start" ${convertible().length && !running() ? '' : 'disabled'}>▶ Convert ${convertible().length || ''}</button>
+      <button class="b-btn stop" data-act="cancel" ${running() ? '' : 'disabled'}>■ Cancel</button>
+      <div class="b-out"><span>Output</span><span class="val mono">${S.out.dir}</span><button class="b-btn" data-act="dir" ${running() ? 'disabled' : ''}>Change…</button>
+        <div class="b-sep"></div><span>Split</span><button class="sw ${S.out.split ? 'on' : ''}" data-act="split" ${running() ? 'disabled' : ''}></button>
+        <span class="mono" style="color:${S.out.split ? '#e3e6ea' : '#5c636e'}">${S.out.gib} GB</span></div>
+    </div>
+    <div class="b-main">
+      <div class="b-left">${left}<div class="b-log mono">${logHtml}</div></div>
+      <div class="b-right">${s ? bInspector(s) : `<div class="b-empty"><div><b>Nothing selected</b>Select a file in the queue to see its folders, output and report.</div></div>`}</div>
+    </div>
+    <div class="b-status"><span>Copy mode — OST files are opened read-only</span><span>·</span><span>No mailbox connection</span>
+      <div class="sp">${running() ? `<span>${src(r.queue[r.idx]).name} · ${currentFolder(src(r.queue[r.idx]), r.prog[r.queue[r.idx]].done)}</span><span class="b-mini"><i style="width:${pct}%"></i></span><span class="num mono">${pct}%</span>`
+        : finished() ? `<span>${S.run.phase === 'done' ? 'Conversion finished' : 'Conversion cancelled'} · see Report</span>` : `<span>Idle</span>`}</div></div>
+  </div>`;
+}
+function bInspector(s) {
+  const rep = S.run.reports[s.id];
+  const tabs = [['folders', 'Folders', s.status === 'ready' ? totals(s).folders : null], ['output', 'Output', null], ['report', 'Report', rep ? (rep.skipped.length || '✓') : null]];
+  let pane = '';
+  if (S.tab === 'folders') pane = bFolders(s);
+  else if (S.tab === 'output') pane = bOutput(s);
+  else pane = bReport(s, rep);
+  return `<div class="b-ins-h"><b>${s.name}</b><span class="mono">${s.path}</span><br><span>${s.format}</span></div>
+    <div class="b-tabs">${tabs.map(([k, l, b]) => `<button class="b-tab ${S.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${b !== null ? `<span class="badge">${b}</span>` : ''}</button>`).join('')}</div>
+    <div class="b-pane">${pane}</div>`;
+}
+function bFolders(s) {
+  if (s.status === 'locked') return `<div class="b-note">${lockedText}</div><div style="margin-top:10px"><button class="b-btn pri" data-act="retry" data-id="${s.id}">Retry</button></div>`;
+  if (s.status === 'unsupported') return `<div class="b-note info">${unsupportedText}</div>`;
+  const rows = visibleRows(s).map(({ n, d, kids, open }) => {
+    const st = nstate(n);
+    return `<div class="b-trow ${st === 'off' ? 'off' : ''}" style="padding-left:${8 + d * 18}px">
+      <button class="tw" ${kids ? `data-act="open" data-s="${s.id}" data-n="${n.id}"` : 'tabindex="-1"'}>${kids ? (open ? '▼' : '▶') : ''}</button>
+      <span class="ck ${st}" data-act="tog" data-s="${s.id}" data-n="${n.id}"></span>
+      <span class="nm" data-act="tog" data-s="${s.id}" data-n="${n.id}">${n.name}</span>
+      <span class="c num mono">${n.count ? $n(n.count) : '·'}</span><span class="z num mono">${n.mb ? mbFmt(n.mb) : ''}</span></div>`;
+  }).join('');
+  const t = totals(s);
+  return `<div class="b-tree-h"><span>Folder</span><span class="s"><span>Items</span><span>Size</span></span></div>${rows}
+    <div class="b-tot"><span>${t.folders}/${t.all} folders · <button class="b-btn" style="padding:0 4px" data-act="all" data-s="${s.id}" data-v="1">all</button><button class="b-btn" style="padding:0 4px" data-act="all" data-s="${s.id}" data-v="0">none</button></span>
+      <span class="num mono"><b>${$n(t.items)}</b> items · <b>${gb(t.mb)}</b></span></div>`;
+}
+function bOutput(s) {
+  if (s.status !== 'ready') return `<div class="b-note info">Nothing to write until this file can be read.</div>`;
+  return `<div class="b-sec"><h4>Destination (all files)</h4><dl class="b-kv"><dt>Folder</dt><dd class="mono">${S.out.dir}</dd>
+      <dt>Split</dt><dd>${S.out.split ? `On — ` : `Off `}<button class="sw ${S.out.split ? 'on' : ''}" data-act="split"></button>
+      ${S.out.split ? `<span style="margin-left:8px">${[5, 10, 20, 40].map(v => `<button class="b-btn" style="padding:2px 6px;${S.out.gib === v ? 'background:#2a2e35;color:#2bc4b0' : ''}" data-act="gib" data-v="${v}">${v} GB</button>`).join('')}</span>` : ''}</dd>
+      <dt>Mode</dt><dd>Copy — the OST is never written</dd></dl></div>
+    <div class="b-sec"><h4>Files this OST will produce</h4><table class="b-files">${parts(s).map(p => `<tr><td><i class="fg"></i>${p.name}</td><td class="num mono" style="text-align:right">~${p.gb.toFixed(1)} GB</td></tr>`).join('')}</table>
+      ${overLimit(s) ? `<div class="b-note">${limitText(s)}</div>` : ''}</div>`;
+}
+function bReport(s, rep) {
+  if (!rep) return `<div class="b-note info">The report appears here after this file is converted.</div>`;
+  if (rep.status !== 'done') return `<div class="b-note">${rep.status === 'cancelled' ? `Cancelled after ${$n(rep.items)} items. The unfinished PST was removed.` : 'Not started: the conversion was cancelled before this file’s turn.'}</div>`;
+  return `<div class="b-sec"><h4>Result</h4><dl class="b-kv num"><dt>Items converted</dt><dd class="mono">${$n(rep.items)}</dd><dt>Folders</dt><dd class="mono">${rep.folders}</dd>
+      <dt>Skipped items</dt><dd class="mono" style="color:${rep.skipped.length ? '#f5b942' : 'inherit'}">${rep.skipped.length}</dd><dt>Time</dt><dd class="mono">${rep.mins} min</dd></dl></div>
+    <div class="b-sec"><h4>Files written</h4><table class="b-files">${rep.files.map(f => `<tr><td><i class="fg"></i>${f.name}</td><td class="num mono" style="text-align:right">${f.gb.toFixed(1)} GB</td></tr>`).join('')}</table>
+      <div style="margin-top:8px"><button class="b-btn" data-act="openFolder">Open folder</button><button class="b-btn" data-act="saveReport">Save report…</button></div></div>
+    ${rep.skipped.length ? `<div class="b-sec"><h4>Skipped items</h4><table class="b-files">${rep.skipped.map(k => `<tr><td>${k.what}<br><span style="color:#8b929e">${k.folder} — ${k.why}</span></td></tr>`).join('')}</table></div>` : ''}
+    <div class="b-sec"><h4>Mailbox completeness</h4><div class="b-note info"><b>Unknown.</b> ${COMPLETENESS.body}</div>
+      ${rep.headersOnly ? `<div class="b-note">${headersOnlyText(rep.headersOnly)}</div>` : ''}</div>`;
+}
+
+/* =========================================================
+   VARIANT C — Flow
+   ========================================================= */
+function VariantC() {
+  const s = cur(), r = S.run;
+  const osts = S.sources.map(x => {
+    const dot = x.status === 'ready' ? '#2f9e58' : x.status === 'locked' ? '#e3a21a' : '#b8ad9e';
+    const p = r.prog[x.id];
+    const st = p ? { waiting: 'Queued', running: 'Converting…', done: 'Converted', cancelled: 'Cancelled', skipped: 'Not started' }[p.state]
+      : x.status === 'ready' ? `${$n(totals(x).items)} items selected` : x.status === 'locked' ? 'In use by Outlook' : 'Not supported';
+    return `<div class="c-ost ${x.id === S.sel ? 'sel' : ''}" data-act="sel" data-id="${x.id}">
+      ${running() ? '' : `<button class="x rm" data-act="remove" data-id="${x.id}" title="Remove">×</button>`}
+      <b>${x.name}</b><div class="sub">${gb(srcMb(x))} · modified ${x.modified}</div>
+      <div class="st"><span class="c-dot" style="background:${dot}"></span>${st}
+        ${x.status === 'locked' ? `<button class="c-btn sm" data-act="retry" data-id="${x.id}">Retry</button>` : ''}</div>
+      ${x.status === 'locked' && x.id === S.sel ? `<div class="sub" style="margin-top:6px">${lockedText}</div>` : ''}
+      ${x.status === 'unsupported' && x.id === S.sel ? `<div class="sub" style="margin-top:6px">${unsupportedText}</div>` : ''}</div>`;
+  }).join('');
+  const from = `${osts}${running() ? '' : `<button class="c-add" data-act="add"><b>+ Add OST</b>or drop files anywhere</button>
+    ${S.sources.length < 3 ? `<div style="text-align:center;margin-top:8px"><button class="c-ln" data-act="addAll">add all samples</button></div>` : ''}`}`;
+
+  let what = `<div class="c-empty"><b>Nothing to show yet</b>Add an OST to see its folders and item counts.</div>`;
+  if (s && s.status === 'ready') {
+    const rows = visibleRows(s).map(({ n, d, kids, open }) => {
+      const st = nstate(n);
+      return `<div class="c-frow ${d ? 'kid' : ''} ${st === 'off' ? 'off' : ''}" style="padding-left:${12 + d * 22}px">
+        <button class="tw" ${kids ? `data-act="open" data-s="${s.id}" data-n="${n.id}"` : 'tabindex="-1"'}>${kids ? (open ? '▾' : '▸') : ''}</button>
+        <span class="nm">${n.name}</span><span class="sz num">${n.mb ? mbFmt(n.mb) : ''}</span>
+        <span class="cnt num">${n.count ? $n(n.count) : (kids ? '' : '0')}</span>
+        <button class="c-sw ${st}" data-act="tog" data-s="${s.id}" data-n="${n.id}" ${running() ? 'disabled' : ''}></button></div>`;
+    }).join('');
+    const t = totals(s);
+    what = `<div class="c-what">${rows}</div><div class="c-tot"><span>${t.folders} of ${t.all} folders</span><b class="num">${$n(t.items)} items</b></div>`;
+  } else if (s) {
+    what = `<div class="c-empty"><b>${s.status === 'locked' ? 'Waiting for Outlook to close' : 'Can’t read this file'}</b>${s.status === 'locked' ? lockedText : unsupportedText}</div>`;
+  }
+
+  const list = convertible();
+  const to = `<div class="c-to"><div class="c-lab">Save to</div><div class="c-path">${S.out.dir}</div>${running() ? '' : '<button class="c-ln" data-act="dir">Change folder</button>'}</div>
+    <div class="c-to"><div class="c-splitrow"><div><b>Split large PSTs</b><div class="sub" style="color:var(--mut);font-size:12px">${S.out.split ? `Up to ${S.out.gib} GB each, items kept whole` : 'One PST per OST'}</div></div>
+      <button class="c-sw ${S.out.split ? 'on' : ''}" data-act="split" ${running() ? 'disabled' : ''}></button></div>
+      ${S.out.split ? `<input class="c-range" type="range" min="5" max="45" step="5" value="${S.out.gib}" data-change="gib" ${running() ? 'disabled' : ''}>` : ''}</div>
+    <div class="c-to"><div class="c-lab">You’ll get</div><div class="c-stack">${list.length ? list.flatMap(x => parts(x)).map(p => `<div class="c-pst"><i>PST</i><span>${p.name}</span><em class="num">~${p.gb.toFixed(1)} GB</em></div>`).join('') : '<div class="sub" style="color:var(--mut)">PST files appear here.</div>'}</div>
+      ${list.filter(overLimit).map(x => `<div class="c-warn"><b>Over Outlook’s 50 GB limit</b>${limitText(x)}</div>`).join('')}</div>`;
+
+  let go;
+  if (running()) {
+    const all = r.queue.reduce((a, id) => a + r.prog[id].total, 0), done = r.queue.reduce((a, id) => a + r.prog[id].done, 0), pct = Math.floor(done / all * 100);
+    const id = r.queue[r.idx];
+    go = `<div class="c-go" role="progressbar" aria-valuenow="${pct}"><span class="fill" style="width:${pct}%"></span>
+      <span class="lbl"><span class="num">${pct}%</span><small>${src(id).name} · ${currentFolder(src(id), r.prog[id].done)} · ${etaText(src(id), r.prog[id].done)}</small></span>
+      <button class="cancel" data-act="cancel">Cancel</button></div>`;
+  } else if (finished()) {
+    go = `<button class="c-go" data-act="sheet" data-v="1"><span class="fill" style="width:100%;background:${S.run.phase === 'done' ? '#2f9e58' : '#a3412b'}"></span>
+      <span class="lbl">${S.run.phase === 'done' ? 'Done' : 'Cancelled'}<small>Open the report</small></span><span class="arrow">→</span></button>`;
+  } else {
+    const n = list.length, p = totalParts();
+    go = `<button class="c-go" data-act="start" ${n ? '' : 'disabled'}><span class="lbl">${n ? `Convert ${n} OST${n > 1 ? 's' : ''} into ${p} PST${p > 1 ? 's' : ''}` : 'Add an OST to start'}
+      ${n ? `<small class="num">${$n(list.reduce((a, x) => a + totals(x).items, 0))} items · about ${gb(list.reduce((a, x) => a + totals(x).mb, 0))}</small>` : ''}</span><span class="arrow">→</span></button>`;
+  }
+
+  return `<div class="win vC" style="position:relative">
+    <div class="titlebar"><div class="t"><span class="logo"></span>PstOff</div><div class="wc"><span>—</span><span>☐</span><span>✕</span></div></div>
+    <div class="c-head"><h1>PstOff</h1><p>Turn Outlook OST files into PST files you can open anywhere.</p><span class="c-mode">COPY MODE · OST NEVER CHANGED</span></div>
+    <div class="c-cols">
+      <div class="c-col"><h2><em>1</em>From</h2><div class="c-scroll">${from}</div></div>
+      <div class="c-arrow">→</div>
+      <div class="c-col"><h2><em>2</em>What${s ? ` <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--mut)">· ${s.name}</span>` : ''}</h2><div class="c-scroll">${what}</div></div>
+      <div class="c-arrow">→</div>
+      <div class="c-col"><h2><em>3</em>To</h2><div class="c-scroll">${to}</div></div>
+    </div>
+    ${go}
+    ${S.sheet && finished() ? cSheet() : ''}
+  </div>`;
+}
+function cSheet() {
+  const r = S.run;
+  const recs = r.queue.map(id => { const s = src(id), rep = r.reports[id];
+    return `<div class="c-rc"><h3><span>${s.name}</span><span style="color:${rep.status === 'done' ? '#2f9e58' : '#a3412b'}">${rep.status === 'done' ? '✓ Converted' : rep.status === 'cancelled' ? '✕ Cancelled' : '– Not started'}</span></h3>
+      ${rep.status === 'done' ? `<div class="c-line"><span>Items converted</span><b class="num">${$n(rep.items)}</b></div>
+        <div class="c-line"><span>Folders</span><b class="num">${rep.folders}</b></div>
+        <div class="c-line"><span>Skipped items</span><b class="num">${rep.skipped.length}</b></div>
+        ${rep.files.map(f => `<div class="c-line"><span><i class="fg"></i>${f.name}</span><b class="num">${f.gb.toFixed(1)} GB</b></div>`).join('')}
+        ${rep.skipped.map(k => `<div class="c-line" style="font-size:12px"><span>${k.what} (${k.folder})</span><span style="text-align:right;max-width:200px">${k.why}</span></div>`).join('')}
+        ${rep.headersOnly ? `<div class="c-q" style="background:#ffe9dc;color:#7a2a06"><b>Not everything was downloaded</b>${headersOnlyText(rep.headersOnly)}</div>` : ''}`
+      : `<div class="c-line"><span>${rep.status === 'cancelled' ? `Stopped after ${$n(rep.items)} items; the unfinished PST was removed.` : 'Cancelled before its turn.'}</span></div>`}</div>`; }).join('');
+  return `<div class="c-sheet-bg" data-act="sheet" data-v="0"></div><aside class="c-sheet">
+    <div class="sh"><h2>Conversion report</h2><p>${new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} · saved to ${S.out.dir}</p></div>
+    <div class="sb">${recs}<div class="c-q"><b>${COMPLETENESS.title}</b>${COMPLETENESS.body}</div></div>
+    <div class="sf"><button class="c-btn pri" data-act="openFolder">Open folder</button><button class="c-btn" data-act="saveReport">Save report</button>
+      <span style="flex:1"></span><button class="c-btn" data-act="again">Done</button></div></aside>`;
+}
+
+/* ===================== render ===================== */
+function stateDump() {
+  const r = S.run;
+  return JSON.stringify({
+    variant: S.variant, step: S.step, tab: S.tab, selected: S.sel,
+    output: S.out,
+    sources: S.sources.map(s => ({ name: s.name, status: s.status, ...(s.status === 'ready' ? (({ items, folders, all }) => ({ selectedItems: items, folders: `${folders}/${all}` }))(totals(s)) : {}), ...(s.status === 'ready' ? { pstFiles: parts(s).map(p => `${p.name} ~${p.gb.toFixed(1)} GB`), overOutlookLimit: overLimit(s) } : {}) })),
+    run: { phase: r.phase, progress: Object.fromEntries(Object.entries(r.prog).map(([k, v]) => [src(k)?.name, `${v.state} ${v.done}/${v.total}`])), reports: Object.keys(r.reports).length },
+  }, null, 2);
+}
+function render() {
+  const view = { A: VariantA, B: VariantB, C: VariantC }[S.variant]();
+  const name = VARIANTS.find(v => v[0] === S.variant)[1];
+  document.getElementById('app').innerHTML = view
+    + (S.modal === 'cancel' ? `<div class="modal-bg"><div class="modal"><h3>Stop converting?</h3>
+        <p>The PST being written now is unfinished, so it will be removed. PST files that already finished are kept. Your OST files are not affected.</p>
+        <div class="acts"><button class="btn" data-act="cancelNo">Keep converting</button><button class="btn pri" style="background:#b3261e;border-color:#b3261e" data-act="cancelYes">Stop</button></div></div></div>` : '')
+    + (S.toast ? `<div class="toast">${S.toast}</div>` : '')
+    + (S.showState ? `<div class="proto-state">${stateDump()}</div>` : '')
+    + `<div class="proto-bar" title="Prototype switcher — not part of the design">
+        <button data-act="vprev" aria-label="Previous variant">◀</button><span class="lbl">${S.variant} · ${name}</span>
+        <button data-act="vnext" aria-label="Next variant">▶</button><button class="st" data-act="state">${S.showState ? 'hide' : 'state'}</button></div>`;
+}
+
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el || el.disabled) return;
+  e.stopPropagation();
+  A[el.dataset.act]?.(el.dataset, e);
+});
+document.addEventListener('change', e => {
+  const el = e.target.closest('[data-change]');
+  if (el?.dataset.change === 'gib') { S.out.gib = +el.value; render(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, textarea, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') cycle(-1);
+  if (e.key === 'ArrowRight') cycle(1);
+});
+render();
+</script>
+</body>
+</html>
