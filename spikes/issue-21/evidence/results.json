@@ -1,0 +1,1372 @@
+{
+  "scope": "PUBLIC only; Q16 rows from post-Q12/Q15 PCs, documented computed rules, unresolved cache retained",
+  "source_sha256": "b18ff390d0c22273029ee580ab6025976af69a4f84e276d1b1c01a988650853d",
+  "q15_baseline_sha256": "e65984caded46d3c19603c45e19c54a82efc9b469f05796a2ba866e481d9f906",
+  "candidate_path": "/home/watermelon/.local/share/pstoff-spike21/output/q16-final-public.pst",
+  "candidate": {
+    "Alias": "gate-253838371153",
+    "ScanFinished": true,
+    "ScanExitCode": 1,
+    "ScanInputUnchanged": true,
+    "LogExists": true,
+    "LogReportsFinished": true,
+    "DiagnosticLineCount": 3,
+    "OutlookChecked": false,
+    "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+    "gate": "FAIL",
+    "original_output_unchanged": true,
+    "path": "/home/watermelon/.local/share/pstoff-spike21/output/q16-final-public.pst",
+    "sha256": "32257b4b4c759d085bb2eb7aafaaf33847d464d2c8b22b33e3df29cb3eccd765",
+    "strict_exit": 1,
+    "exact_original_three_mismatch_rows": true
+  },
+  "provenance": {
+    "distinct_items": 17,
+    "row_occurrences": 18,
+    "tables": 8,
+    "rows_with_differences": 3,
+    "cell_counts": {
+      "regenerate": 263,
+      "retain_cached": 781,
+      "retained_present": 59,
+      "retained_absent": 722,
+      "differed": 13
+    },
+    "by_tag": {
+      "00150040": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "00170003": {
+        "regenerate": 4
+      },
+      "001a001f": {
+        "regenerate": 18
+      },
+      "00300040": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "00360003": {
+        "retain_cached": 4,
+        "retained_absent": 4
+      },
+      "0037001f": {
+        "regenerate": 17
+      },
+      "00390040": {
+        "regenerate": 3
+      },
+      "00410102": {
+        "regenerate": 2
+      },
+      "0042001f": {
+        "regenerate": 4,
+        "differed": 3
+      },
+      "0057000b": {
+        "retain_cached": 4,
+        "retained_absent": 4
+      },
+      "0058000b": {
+        "retain_cached": 4,
+        "retained_absent": 4
+      },
+      "0070001f": {
+        "regenerate": 4
+      },
+      "00710102": {
+        "regenerate": 4,
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "0e03001f": {
+        "regenerate": 4,
+        "differed": 4
+      },
+      "0e04001f": {
+        "regenerate": 4
+      },
+      "0e05001f": {
+        "retain_cached": 1,
+        "retained_present": 1
+      },
+      "0e060040": {
+        "regenerate": 4
+      },
+      "0e070003": {
+        "regenerate": 18
+      },
+      "0e080003": {
+        "regenerate": 4
+      },
+      "0e170003": {
+        "retain_cached": 18,
+        "retained_present": 18
+      },
+      "0e2a000b": {
+        "retain_cached": 4,
+        "retained_absent": 4
+      },
+      "0e2b0003": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "0e300102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "0e330014": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "0e340102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "0e380003": {
+        "retain_cached": 11,
+        "retained_present": 1,
+        "retained_absent": 10
+      },
+      "0e3c0102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "0e3d0102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "0ea20003": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "1035001f": {
+        "regenerate": 2
+      },
+      "10800003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "10900003": {
+        "retain_cached": 2,
+        "retained_absent": 2,
+        "regenerate": 1
+      },
+      "10950003": {
+        "retain_cached": 2,
+        "retained_absent": 2,
+        "regenerate": 1
+      },
+      "10970003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "10981102": {
+        "retain_cached": 17,
+        "retained_absent": 17
+      },
+      "3001001f": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "30070040": {
+        "regenerate": 2
+      },
+      "30080040": {
+        "regenerate": 18
+      },
+      "300b0102": {
+        "regenerate": 2
+      },
+      "30130102": {
+        "regenerate": 4,
+        "differed": 3
+      },
+      "36020003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "36e20003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "60010003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "65c60003": {
+        "regenerate": 3,
+        "differed": 3
+      },
+      "65e20102": {
+        "regenerate": 17
+      },
+      "65e30102": {
+        "regenerate": 17
+      },
+      "66120003": {
+        "retain_cached": 18,
+        "retained_present": 18
+      },
+      "6619001f": {
+        "regenerate": 2
+      },
+      "66220040": {
+        "retain_cached": 11,
+        "retained_absent": 11
+      },
+      "66230003": {
+        "retain_cached": 11,
+        "retained_absent": 11
+      },
+      "66280014": {
+        "retain_cached": 17,
+        "retained_absent": 14,
+        "retained_present": 3
+      },
+      "66a00003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a10102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a20102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a30102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a40102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a50102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a60003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a7000b": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a80003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66a90003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "66aa000b": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "67f10003": {
+        "regenerate": 1
+      },
+      "67f20003": {
+        "regenerate": 18
+      },
+      "67f30003": {
+        "retain_cached": 18,
+        "retained_present": 18
+      },
+      "67f40014": {
+        "regenerate": 18
+      },
+      "67f5000b": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "6800001f": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "6803000b": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "68051003": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "682f001f": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "68330048": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68340003": {
+        "retain_cached": 13,
+        "retained_absent": 13
+      },
+      "683a0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68410003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68420102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68430102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68460003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68470003": {
+        "regenerate": 3
+      },
+      "68480003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68490003": {
+        "regenerate": 3
+      },
+      "684a0003": {
+        "regenerate": 3
+      },
+      "684b0102": {
+        "regenerate": 3
+      },
+      "684c0102": {
+        "regenerate": 3
+      },
+      "684d0102": {
+        "regenerate": 3
+      },
+      "684e0102": {
+        "regenerate": 3
+      },
+      "684f0102": {
+        "regenerate": 3
+      },
+      "68500102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "6851001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68520003": {
+        "regenerate": 3
+      },
+      "68530003": {
+        "regenerate": 3
+      },
+      "68540102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "685d0003": {
+        "regenerate": 8,
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "68900102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68910102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "68920003": {
+        "regenerate": 3
+      },
+      "6e010003": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "70030003": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "70040102": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "70050102": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "7006001f": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "70070003": {
+        "retain_cached": 14,
+        "retained_absent": 14
+      },
+      "7c060003": {
+        "regenerate": 8,
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "7c080102": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80000003": {
+        "regenerate": 2,
+        "retain_cached": 8,
+        "retained_absent": 8
+      },
+      "800a001f": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "80170003": {
+        "regenerate": 3
+      },
+      "80180003": {
+        "regenerate": 3
+      },
+      "80190003": {
+        "regenerate": 2,
+        "retain_cached": 8,
+        "retained_absent": 8
+      },
+      "801a0003": {
+        "regenerate": 3
+      },
+      "801c000b": {
+        "regenerate": 2
+      },
+      "801d0003": {
+        "regenerate": 2
+      },
+      "8022000b": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "80280003": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "8029000b": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "802a0102": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "802b0040": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "802c0040": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "802d0040": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "802e000b": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "802f101f": {
+        "retain_cached": 7,
+        "retained_absent": 7
+      },
+      "8030001f": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "80310003": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "80320003": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "80330003": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "803a0048": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "803b0048": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "803c0048": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "803d0048": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "803e001f": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "803f001f": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "8040001f": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "8041001f": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "8042001f": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80430003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "8044001f": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "8045001f": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80460003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80470003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80480003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80490003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "804a0048": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "804b0048": {
+        "retain_cached": 8,
+        "retained_absent": 8
+      },
+      "804c001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "804d0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "804e0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "804f0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8050001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8051001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8052001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8053001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8054001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8055001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "80560040": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80570040": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80580102": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "80590102": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "805b0003": {
+        "retain_cached": 5,
+        "retained_absent": 5
+      },
+      "811b0040": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "811c0003": {
+        "regenerate": 1,
+        "retain_cached": 1,
+        "retained_absent": 1
+      },
+      "811e001f": {
+        "retain_cached": 2,
+        "retained_absent": 2
+      },
+      "81280048": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81290003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "812a0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "812b001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "812c001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "812d001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "812e001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "812f001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8130001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8131001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81320003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81330040": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81340003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81350003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8136001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8137001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81380102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8139001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "813a001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "813b001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "813c001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "813d001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "813e0040": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "813f0040": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81400003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81410003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81420102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81430102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81440040": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81450040": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81460003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81470102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81480040": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81490040": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "814a0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "814b0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "814c0102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "814d0003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "814e001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "814f001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8150001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8151001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8152001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8153001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8154001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8155001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81560003": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81570102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "8158001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "81590102": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "815a001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      },
+      "815b001f": {
+        "retain_cached": 3,
+        "retained_absent": 3
+      }
+    }
+  },
+  "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+  "preservation": {
+    "identical_pcs": 64,
+    "identical_properties": 1550,
+    "row_ids_preserved": 67,
+    "identical_rows": 63,
+    "identical_existing_cells": 801,
+    "changed_cells_by_id": {
+      "0042": 3,
+      "3013": 3
+    },
+    "added_cells_by_id": {
+      "0e03": 4,
+      "65c6": 3
+    },
+    "removed_cells_by_id": {}
+  },
+  "policy_guards": "policy_guards_passed=13",
+  "q15_guards": "Q15 selection guards PASS: table integrity, missing cells, conflicts, XID/PCL shape, pair consistency, existing type/value, single missing member, preserve existing",
+  "microsoft_reader": "version=Unicode amap_valid=Valid2\nstore_property_count=25\nroot_rows=2 decoded_root_values=16\nipm_key_matches=true\nipm_opened=true hierarchy_present=true",
+  "trials": {
+    "trial01-subject-only": {
+      "mode": "only:0037001f",
+      "strict_scan": {
+        "Alias": "gate-541fd321aa1e",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial01-subject-only.pst",
+        "sha256": "1a0f6f1fec35b4a49ead218bdd61ab27ea59cf1e4553bdca6cebcdc96c18799a",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 67,
+        "identical_existing_cells": 807,
+        "changed_cells_by_id": {},
+        "added_cells_by_id": {},
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial02-sender-only": {
+      "mode": "only:0042001f",
+      "strict_scan": {
+        "Alias": "gate-7e94c6a00d0f",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial02-sender-only.pst",
+        "sha256": "cc4f3af441b3a7d1be7daed0b6a46b063a01d64bccf05bbeb2c2bec3dbc5975e",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 64,
+        "identical_existing_cells": 804,
+        "changed_cells_by_id": {
+          "0042": 3
+        },
+        "added_cells_by_id": {},
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial03-conversation-only": {
+      "mode": "only:30130102",
+      "strict_scan": {
+        "Alias": "gate-1173016c386b",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial03-conversation-only.pst",
+        "sha256": "3eb0703e12ee26bd098bc224691ad86b20073f65cdffced064d8b097b4fb565e",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 64,
+        "identical_existing_cells": 804,
+        "changed_cells_by_id": {
+          "3013": 3
+        },
+        "added_cells_by_id": {},
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial04-sender-conversation": {
+      "mode": "only:0042001f,30130102",
+      "strict_scan": {
+        "Alias": "gate-97f5f6ed18fb",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial04-sender-conversation.pst",
+        "sha256": "3a3eef888bad9916b2177c867d0e205c02fc4f62cac6f651846b3a216cf3b64e",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 64,
+        "identical_existing_cells": 801,
+        "changed_cells_by_id": {
+          "0042": 3,
+          "3013": 3
+        },
+        "added_cells_by_id": {},
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial05-display-only": {
+      "mode": "only:0e03001f",
+      "strict_scan": {
+        "Alias": "gate-3a52f104e458",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial05-display-only.pst",
+        "sha256": "9a8f42a21604ab4d96f73c0a8591050b5bfb2364e6b91a4f93e26ba1318c637d",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 63,
+        "identical_existing_cells": 807,
+        "changed_cells_by_id": {},
+        "added_cells_by_id": {
+          "0e03": 4
+        },
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial06-secure-submit-only": {
+      "mode": "only:65c60003",
+      "strict_scan": {
+        "Alias": "gate-143a76710368",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial06-secure-submit-only.pst",
+        "sha256": "1ddac1c96b142b251419cd8385d637feb906243559d7224a6aaab9f8b4e14ec5",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 64,
+        "identical_existing_cells": 807,
+        "changed_cells_by_id": {},
+        "added_cells_by_id": {
+          "65c6": 3
+        },
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial07-hasattach-only": {
+      "mode": "only:0e1b000b",
+      "strict_scan": {
+        "Alias": "gate-d92566f565c5",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial07-hasattach-only.pst",
+        "sha256": "1a0f6f1fec35b4a49ead218bdd61ab27ea59cf1e4553bdca6cebcdc96c18799a",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 67,
+        "identical_existing_cells": 807,
+        "changed_cells_by_id": {},
+        "added_cells_by_id": {},
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial08-flags-only": {
+      "mode": "only:0e070003",
+      "strict_scan": {
+        "Alias": "gate-fc197855bd8f",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial08-flags-only.pst",
+        "sha256": "1a0f6f1fec35b4a49ead218bdd61ab27ea59cf1e4553bdca6cebcdc96c18799a",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 67,
+        "identical_existing_cells": 807,
+        "changed_cells_by_id": {},
+        "added_cells_by_id": {},
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial09-size-only": {
+      "mode": "only:0e080003",
+      "strict_scan": {
+        "Alias": "gate-3c7d6f11f46e",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial09-size-only.pst",
+        "sha256": "1a0f6f1fec35b4a49ead218bdd61ab27ea59cf1e4553bdca6cebcdc96c18799a",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 67,
+        "identical_existing_cells": 807,
+        "changed_cells_by_id": {},
+        "added_cells_by_id": {},
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": false
+    },
+    "trial10-donor-shape-v2": {
+      "mode": "shape",
+      "strict_scan": {
+        "Alias": "gate-fe8cc79aa972",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial10-donor-shape-v2.pst",
+        "sha256": "c53e0237e7dce58f1b5b941eb72cbf109ed3b5818a227b0fcb2b0eebcb06bf62",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 63,
+        "identical_existing_cells": 801,
+        "changed_cells_by_id": {
+          "0042": 3,
+          "3013": 3
+        },
+        "added_cells_by_id": {
+          "0e03": 4,
+          "65c6": 3
+        },
+        "removed_cells_by_id": {}
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": true
+    },
+    "trial11-clear-local-cache": {
+      "mode": "diagnostic-clear:66120003,66280014",
+      "strict_scan": {
+        "Alias": "gate-271724ccbe4c",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial11-clear-local-cache.pst",
+        "sha256": "e1e9dbdf7e3ef227c1b9b86e2f911fdff8fbab8bce6a96d2424667b54f844722",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 63,
+        "identical_existing_cells": 794,
+        "changed_cells_by_id": {
+          "0042": 3,
+          "3013": 3
+        },
+        "added_cells_by_id": {
+          "0e03": 4,
+          "65c6": 3
+        },
+        "removed_cells_by_id": {
+          "6612": 4,
+          "6628": 3
+        }
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": true
+    },
+    "trial12-clear-local-status": {
+      "mode": "diagnostic-clear:0e170003,66120003,66280014",
+      "strict_scan": {
+        "Alias": "gate-0c0ff841789d",
+        "ScanFinished": true,
+        "ScanExitCode": 1,
+        "ScanInputUnchanged": true,
+        "LogExists": true,
+        "LogReportsFinished": true,
+        "DiagnosticLineCount": 3,
+        "OutlookChecked": false,
+        "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+        "gate": "FAIL",
+        "original_output_unchanged": true,
+        "path": "/home/watermelon/.local/share/pstoff-spike21/output/trial12-clear-local-status.pst",
+        "sha256": "21d31ce85e11ebbc871fadebd76475606bb1d75db3b883f737dce61def2f97d3",
+        "strict_exit": 1,
+        "exact_original_three_mismatch_rows": true
+      },
+      "preservation": {
+        "identical_pcs": 64,
+        "identical_properties": 1550,
+        "row_ids_preserved": 67,
+        "identical_rows": 63,
+        "identical_existing_cells": 790,
+        "changed_cells_by_id": {
+          "0042": 3,
+          "3013": 3
+        },
+        "added_cells_by_id": {
+          "0e03": 4,
+          "65c6": 3
+        },
+        "removed_cells_by_id": {
+          "0e17": 4,
+          "6612": 4,
+          "6628": 3
+        }
+      },
+      "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+      "diagnostic_only": true
+    }
+  },
+  "final_source_replay": {
+    "Alias": "gate-879f7cfe1b9b",
+    "ScanFinished": true,
+    "ScanExitCode": 1,
+    "ScanInputUnchanged": true,
+    "LogExists": true,
+    "LogReportsFinished": true,
+    "DiagnosticLineCount": 3,
+    "OutlookChecked": false,
+    "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+    "gate": "FAIL",
+    "original_output_unchanged": true,
+    "path": "/home/watermelon/.local/share/pstoff-spike21/output/q16-final-source-replay.pst",
+    "sha256": "32257b4b4c759d085bb2eb7aafaaf33847d464d2c8b22b33e3df29cb3eccd765",
+    "strict_exit": 1,
+    "exact_original_three_mismatch_rows": true
+  },
+  "controls": {
+    "valid_empty": {
+      "Alias": "gate-8c6628116d7d",
+      "ScanFinished": true,
+      "ScanExitCode": 1,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": true,
+      "DiagnosticLineCount": 0,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+      "gate": "PASS",
+      "original_output_unchanged": true,
+      "strict_exit": 0,
+      "sha256": "c16ae985d12011ad510ccb3b10f19d61b0c3b3311fa4696fb56b87812bd8d5c5"
+    },
+    "invalid_zeros": {
+      "Alias": "gate-bab42f6909e2",
+      "ScanFinished": true,
+      "ScanExitCode": 0,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": false,
+      "DiagnosticLineCount": 1,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+      "gate": "FAIL",
+      "original_output_unchanged": true,
+      "strict_exit": 1,
+      "sha256": "ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7"
+    }
+  },
+  "donor": {
+    "public_path": "java-libpst/src/test/resources/dist-list.pst",
+    "sha256": "c86841da106036b5abe5a2141dc7644cbb2bf8b504873515eb35a2efeb8c28ac",
+    "donor_normal_row_mismatch_reported": false,
+    "whole_file_valid": false,
+    "strict_diagnostic_count": 133,
+    "shape_limit": "Uses column order from a normal row with no reported row mismatch; donor file has schema errors and other failing rows. All target columns and decoded values retained. Not evidence from a globally valid normal-item file.",
+    "downloaded_libyal_donor_rejected": {
+      "sha256": "df01707f76d0e24ab913cf1ffeffa6eaf9c1d590e02102c7ed26bb3ac51d4e24",
+      "strict_diagnostic_count": 408
+    }
+  },
+  "independent_libpff": {
+    "run": false,
+    "reason": "No clean candidate. Conditional independent comparison deferred; no previous result relabelled."
+  },
+  "verdict": "FAIL/3. No sufficient column set or cause isolated within Q16 and 12 bounded diagnostic trials. No new item-PC policy applied. Exact next product decision is not established."
+}
