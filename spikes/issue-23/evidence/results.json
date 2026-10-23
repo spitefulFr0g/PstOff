@@ -1,0 +1,138 @@
+{
+  "candidate": {
+    "Alias": "gate-8843077ae57d",
+    "ScanFinished": true,
+    "ScanExitCode": 1,
+    "ScanInputUnchanged": true,
+    "LogExists": true,
+    "LogReportsFinished": true,
+    "DiagnosticLineCount": 0,
+    "OutlookChecked": false,
+    "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+    "gate": "PASS",
+    "original_output_unchanged": true,
+    "path": "/home/watermelon/.local/share/pstoff-spike23/output/q17-public.pst",
+    "sha256": "1a0919f5baaeeecea6a20b7190a6373109bfaebc7db1bbbcf0cf32af5697bb7b"
+  },
+  "confirmation": {
+    "Alias": "gate-4e4bca72210f",
+    "ScanFinished": true,
+    "ScanExitCode": 1,
+    "ScanInputUnchanged": true,
+    "LogExists": true,
+    "LogReportsFinished": true,
+    "DiagnosticLineCount": 0,
+    "OutlookChecked": false,
+    "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+    "gate": "PASS",
+    "original_output_unchanged": true,
+    "path": "/home/watermelon/.local/share/pstoff-spike23/output/q17-confirm.pst",
+    "sha256": "1a0919f5baaeeecea6a20b7190a6373109bfaebc7db1bbbcf0cf32af5697bb7b"
+  },
+  "source_sha256": "b18ff390d0c22273029ee580ab6025976af69a4f84e276d1b1c01a988650853d",
+  "baseline_sha256": "32257b4b4c759d085bb2eb7aafaaf33847d464d2c8b22b33e3df29cb3eccd765",
+  "preservation": {
+    "identical_pcs": 64,
+    "identical_properties": 1550,
+    "row_ids_preserved": 67,
+    "identical_rows": 63,
+    "identical_existing_cells": 804,
+    "changed_cells_by_id": {},
+    "added_cells_by_id": {},
+    "removed_cells_by_id": {
+      "0e03": 4,
+      "65c6": 3,
+      "6628": 3
+    }
+  },
+  "audit": "nodes=308 byte_identical_non_contents_non_store_streams=156 byte_identical_subnodes=136 preserved_table_row_ids=67 contents_tables=41 missing_columns=0 shared_cell_allocations=0 bad_header_fp=false message_pcs_without_modtime=0 table_rows_with_modtime=18",
+  "q17_counts": [
+    {
+      "tag": "0e03001f",
+      "action": "keep_source_absent_default",
+      "count": 4
+    },
+    {
+      "tag": "65c60003",
+      "action": "keep_source_absent_default",
+      "count": 3
+    },
+    {
+      "tag": "66280014",
+      "action": "omit_missing_pc_cache",
+      "count": 3
+    }
+  ],
+  "policy_guards": {
+    "q12-guards": "Q12 nid=00100028 kind=8 reason=promoted_exact_same_nid_cache source_tables=0000214f occurrences=1\nQ12 nid=00100048 kind=8 reason=promoted_exact_same_nid_cache source_tables=000081cf occurrences=1\nQ12 nid=00100068 kind=8 reason=promoted_exact_same_nid_cache source_tables=000081cf occurrences=1\nQ12 nid=00100088 kind=8 reason=promoted_exact_same_nid_cache source_tables=000081cf occurrences=1\nQ12 nid=001000a8 kind=8 reason=promoted_exact_same_nid_cache source_tables=0000218f occurrences=1\nQ12 nid=001000c8 kind=8 reason=promoted_exact_same_nid_cache source_tables=0000218f occurrences=1\nQ12 nid=001000e8 kind=8 reason=promoted_exact_same_nid_cache source_tables=0000218f occurrences=1\nQ12 nid=00100108 kind=8 reason=promoted_exact_same_nid_cache source_tables=0000218f occurrences=1\nQ12 nid=00100128 kind=8 reason=promoted_exact_same_nid_cache source_tables=0000218f occurrences=1\nQ12 nid=00100148 kind=8 reason=promoted_exact_same_nid_cache source_tables=000081ef occurrences=1\nQ12 nid=00100168 kind=8 reason=promoted_exact_same_nid_cache source_tables=000020cf occurrences=1\nQ12 nid=00100188 kind=8 reason=promoted_exact_same_nid_cache source_tables=000020cf occurrences=1\nQ12 nid=001001a8 kind=8 reason=promoted_exact_same_nid_cache source_tables=000020cf occurrences=1\nQ12 nid=001001c8 kind=8 reason=promoted_exact_same_nid_cache source_tables=000081ef occurrences=1\nQ12 nid=00200084 kind=4 reason=promoted_exact_same_nid_cache source_tables=0000218e occurrences=1\nQ12 nid=002000e4 kind=4 reason=promoted_exact_same_nid_cache source_tables=0000218e occurrences=1\nQ12 nid=00200184 kind=4 reason=promoted_exact_same_nid_cache source_tables=000021ce,00080090 occurrences=2\nQ12_GUARDS PASS actual_source_messages=17 raw_table_rejection_cases=7 existing_preserved=true exact_emission=true missing_invalid_conflicting_rejected=true",
+    "q15-guards": "Q15 selection guards PASS: table integrity, missing cells, conflicts, XID/PCL shape, pair consistency, existing type/value, single missing member, preserve existing",
+    "q16-guards": "policy_guards_passed=13",
+    "q17-guards": "policy_guards_passed=25"
+  },
+  "microsoft_reader": "version=Unicode amap_valid=Valid2\nstore_property_count=25\nroot_rows=2 decoded_root_values=16\nipm_key_matches=true\nipm_opened=true hierarchy_present=true",
+  "controls": {
+    "valid_empty": {
+      "Alias": "gate-e67ca41c8452",
+      "ScanFinished": true,
+      "ScanExitCode": 1,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": true,
+      "DiagnosticLineCount": 0,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+      "gate": "PASS",
+      "original_output_unchanged": true,
+      "sha256": "c16ae985d12011ad510ccb3b10f19d61b0c3b3311fa4696fb56b87812bd8d5c5",
+      "strict_exit": 0
+    },
+    "invalid_zeros": {
+      "Alias": "gate-8d49fef720fd",
+      "ScanFinished": true,
+      "ScanExitCode": 0,
+      "ScanInputUnchanged": true,
+      "LogExists": true,
+      "LogReportsFinished": false,
+      "DiagnosticLineCount": 1,
+      "OutlookChecked": false,
+      "Verdict": "Unclassified: inspect log and compare against controls; exit code alone is insufficient",
+      "gate": "FAIL",
+      "original_output_unchanged": true,
+      "sha256": "ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7",
+      "strict_exit": 1
+    }
+  },
+  "libpff": {
+    "reader_version": "20180714",
+    "source_sha256": "b18ff390d0c22273029ee580ab6025976af69a4f84e276d1b1c01a988650853d",
+    "output_sha256": "1a0919f5baaeeecea6a20b7190a6373109bfaebc7db1bbbcf0cf32af5697bb7b",
+    "source_nodes": 64,
+    "output_nodes": 64,
+    "same_object_ids": true,
+    "matched_raw_properties": 1493,
+    "changed_keys": [
+      "00000021:0:3001:001f",
+      "00000021:0:67ff:0003"
+    ],
+    "added_counts_by_tag": {
+      "3008:0040": 17,
+      "35df:0003": 1,
+      "35e0:0102": 1,
+      "35e3:0102": 1,
+      "35e7:0102": 1,
+      "65e2:0102": 17,
+      "65e3:0102": 17
+    },
+    "missing_properties": 0,
+    "source_reader_errors": [],
+    "output_reader_errors": [],
+    "unexpected_differences": {
+      "changed": [],
+      "missing": [],
+      "added": [],
+      "expected_changes_absent": [],
+      "expected_additions_absent": []
+    },
+    "coverage": "Reachable property-bearing graph; not exhaustive tables, attachments, recipients, embedded payloads or Outlook acceptance."
+  }
+}

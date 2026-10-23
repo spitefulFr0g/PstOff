@@ -1,0 +1,33 @@
+{
+  "reader_version": "20180714",
+  "source_sha256": "b18ff390d0c22273029ee580ab6025976af69a4f84e276d1b1c01a988650853d",
+  "output_sha256": "1a0919f5baaeeecea6a20b7190a6373109bfaebc7db1bbbcf0cf32af5697bb7b",
+  "source_nodes": 64,
+  "output_nodes": 64,
+  "same_object_ids": true,
+  "matched_raw_properties": 1493,
+  "changed_keys": [
+    "00000021:0:3001:001f",
+    "00000021:0:67ff:0003"
+  ],
+  "added_counts_by_tag": {
+    "3008:0040": 17,
+    "35df:0003": 1,
+    "35e0:0102": 1,
+    "35e3:0102": 1,
+    "35e7:0102": 1,
+    "65e2:0102": 17,
+    "65e3:0102": 17
+  },
+  "missing_properties": 0,
+  "source_reader_errors": [],
+  "output_reader_errors": [],
+  "unexpected_differences": {
+    "changed": [],
+    "missing": [],
+    "added": [],
+    "expected_changes_absent": [],
+    "expected_additions_absent": []
+  },
+  "coverage": "Reachable property-bearing graph; not exhaustive tables, attachments, recipients, embedded payloads or Outlook acceptance."
+}

@@ -1,0 +1,352 @@
+--- a/src/convert.rs
++++ b/src/convert.rs
+@@ -47,0 +48,2 @@
++#[path = "q12.rs"]
++pub mod q12;
+@@ -92,0 +95 @@
++    q12: std::collections::BTreeMap<u32, [u8;8]>,
+@@ -104,0 +108 @@
++            q12: Default::default(),
+@@ -179 +183,18 @@
+-        for b in pst.node_blocks(src)? {
++        let mut blocks = pst.node_blocks(src)?;
++        if (std::env::var_os("PSTOFF_TC").is_some() || std::env::var_os("PSTOFF_ALIAS").is_some())
++            && what
++                .strip_prefix("node 0x")
++                .and_then(|s| u32::from_str_radix(s, 16).ok())
++                .is_some_and(|n| n & 31 == 14)
++        {
++            if blocks
++                .first()
++                .is_some_and(|b| b.len() > 3 && b[2] == 0xec && b[3] == 0x7c)
++            {
++                blocks = pst_tc_schema(blocks)?;
++            }
++        }
++        if let Some(value) = what.strip_prefix("node 0x").and_then(|s| u32::from_str_radix(s,16).ok()).and_then(|nid| self.q12.get(&nid)) {
++            blocks = q12::promote(blocks, *value)?;
++        }
++        for b in blocks {
+@@ -524,0 +546 @@
++    if std::env::var_os("PSTOFF_Q12").is_some() { o.q12 = q12::plan(pst, nodes)?; }
+@@ -609,0 +632,4 @@
++    if std::env::var_os("PSTOFF_HEADER").is_some() {
++        // MS-PST 2.2.2.6: newly emitted Unicode PST deprecated maps.
++        header[256..512].fill(0xff);
++    }
+@@ -917,0 +944,168 @@
++
++// EXPLORATORY: schema-only correction. No values are synthesized for added columns.
++fn pst_tc_schema(mut blocks: Vec<Vec<u8>>) -> Result<Vec<Vec<u8>>, String> {
++    let heap = Heap::new(blocks.clone())?;
++    let u16at = |b: &[u8], i: usize| u16::from_le_bytes(b[i..i + 2].try_into().unwrap()) as usize;
++    let u32at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
++    let mut info = heap.item(heap.user_root)?.to_vec();
++    // Only contents TCs have the template's subject column; leave other schemas alone.
++    let cols: Vec<Vec<u8>> = info[22..22 + info[1] as usize * 8]
++        .chunks_exact(8)
++        .map(|c| c.to_vec())
++        .collect();
++    if !cols.iter().any(|c| u32at(c, 0) == 0x0037001f) {
++        return Ok(blocks);
++    }
++    // SCANPST 16 expects binary 0E30; MS-PST's table currently calls it Integer32.
++    // Keep that version discrepancy explicit; these cells remain absent.
++    let required = [
++        0x0e300102u32,
++        0x0e330014,
++        0x0e340102,
++        0x0e3d0102,
++        0x0e3c0102,
++        0x0e380003,
++    ];
++    let add: Vec<u32> = required
++        .into_iter()
++        .filter(|_| std::env::var_os("PSTOFF_TC").is_some())
++        .filter(|t| !cols.iter().any(|c| u32at(c, 0) == *t))
++        .collect();
++    if add.is_empty() && std::env::var_os("PSTOFF_ALIAS").is_none() {
++        return Ok(blocks);
++    }
++    let old4 = u16at(&info, 2);
++    let oldceb = u16at(&info, 6);
++    let oldwidth = u16at(&info, 8);
++    let extra: usize = add
++        .iter()
++        .map(|t| if *t as u16 == 0x14 { 8 } else { 4 })
++        .sum();
++    let bitbase = cols.iter().map(|c| c[7] as usize + 1).max().unwrap_or(0);
++    let bits = bitbase + add.len();
++    if bits > 255 || cols.len() + add.len() > 255 {
++        return Err("TC columns exceed byte index".into());
++    }
++    let newceb = oldceb + extra;
++    let newwidth = newceb + bits.div_ceil(8);
++    let rm = u32at(&info, 14);
++    if rm & 31 != 0 {
++        return Err("spike does not rewrite subnode row matrix".into());
++    }
++    let oldrows = heap.item(rm)?;
++    if oldrows.len() % oldwidth != 0 {
++        return Err("TC matrix has row padding".into());
++    }
++    let mut rows = Vec::new();
++    for row in oldrows.chunks_exact(oldwidth) {
++        let mut new = vec![0; newwidth];
++        new[..old4].copy_from_slice(&row[..old4]);
++        new[old4 + extra..newceb].copy_from_slice(&row[old4..oldceb]);
++        new[newceb..newceb + (oldwidth - oldceb)].copy_from_slice(&row[oldceb..]);
++        rows.extend(new);
++    }
++    let mut clones = Vec::new();
++    if std::env::var_os("PSTOFF_ALIAS").is_some() && !rows.is_empty() {
++        let bi = blocks.len() - 1;
++        let map = u16at(&blocks[bi], 0);
++        let count = u16at(&blocks[bi], map);
++        let bth = u32at(&info, 10);
++        let mut used = std::collections::HashSet::from([bth, heap.user_root, rm]);
++        let bth_data = heap.item(bth)?;
++        if bth_data.len() >= 8 {
++            used.insert(u32at(bth_data, 4));
++        }
++        for row in rows.chunks_exact_mut(newwidth) {
++            for c in &cols {
++                let typ = u32at(c, 0) as u16;
++                if !matches!(typ, 0x001f | 0x001e | 0x0102) {
++                    continue;
++                }
++                let bit = c[7] as usize;
++                if row[newceb + bit / 8] & (0x80 >> (bit % 8)) == 0 {
++                    continue;
++                }
++                let off = u16at(c, 4);
++                let off = if off >= old4 { off + extra } else { off };
++                let hid = u32at(row, off);
++                if hid != 0 && hid & 31 == 0 && !used.insert(hid) {
++                    clones.push(heap.item(hid)?.to_vec());
++                    let newhid = ((bi as u32) << 16) | (((count + clones.len()) as u32) << 5);
++                    put32(row, off, newhid);
++                }
++            }
++        }
++    }
++    let mut updated = cols.clone();
++    for c in &mut updated {
++        let off = u16at(c, 4);
++        if off >= old4 {
++            put16(c, 4, (off + extra) as u16)
++        }
++    }
++    let mut off = old4;
++    for (i, tag) in add.iter().enumerate() {
++        let cb = if *tag as u16 == 0x14 { 8 } else { 4 };
++        let mut c = vec![0; 8];
++        put32(&mut c, 0, *tag);
++        put16(&mut c, 4, off as u16);
++        c[6] = cb as u8;
++        c[7] = (bitbase + i) as u8;
++        off += cb;
++        updated.push(c);
++    }
++    updated.sort_by_key(|c| u32at(c, 0));
++    info.truncate(22);
++    info[1] = updated.len() as u8;
++    for i in [2, 4, 6] {
++        let old = u16at(&info, i);
++        put16(&mut info, i, (old + extra) as u16)
++    }
++    put16(&mut info, 8, newwidth as u16);
++    for c in updated {
++        info.extend(c)
++    }
++    // Preserve every HID, other allocation and row bit. Only physical offsets change.
++    let last = blocks.len() - 1;
++    for (bi, b) in blocks.iter_mut().enumerate() {
++        let map = u16at(b, 0);
++        let count = u16at(b, map);
++        let start = u16at(b, map + 4);
++        let mut out = b[..start].to_vec();
++        let mut offsets = Vec::new();
++        let mut free = 0;
++        let extra_allocs = if bi == last { clones.len() } else { 0 };
++        for ai in 1..=count + extra_allocs {
++            offsets.push(out.len());
++            let hid = ((bi as u32) << 16) | ((ai as u32) << 5);
++            let val = if ai > count {
++                &clones[ai - count - 1][..]
++            } else if hid == heap.user_root {
++                &info[..]
++            } else if rm != 0 && hid == rm {
++                &rows[..]
++            } else {
++                heap.item(hid)?
++            };
++            if val.is_empty() {
++                free += 1
++            }
++            out.extend(val);
++        }
++        offsets.push(out.len());
++        let map = out.len();
++        out.extend(((count + extra_allocs) as u16).to_le_bytes());
++        out.extend((free as u16).to_le_bytes());
++        for o in offsets {
++            out.extend((o as u16).to_le_bytes())
++        }
++        if out.len() > MAX_DATA {
++            return Err(
++                "schema expansion exceeds PST heap block; needs full heap relocation".into(),
++            );
++        }
++        put16(&mut out, 0, map as u16);
++        *b = out;
++    }
++    Ok(blocks)
++}
+--- /dev/null
++++ b/src/q12.rs
+@@ -0,0 +1,144 @@
++// PUBLIC fixture spike: Q12 source-cache observation, never server-history evidence.
++use crate::{ltp::{Heap, bth_records}, ndb::{Pst, Node}};
++use std::collections::BTreeMap;
++fn u16b(b: &[u8], i: usize) -> usize { u16::from_le_bytes(b[i..i+2].try_into().unwrap()) as usize }
++fn u32b(b: &[u8], i: usize) -> u32 { u32::from_le_bytes(b[i..i+4].try_into().unwrap()) }
++
++// A malformed relevant table prevents promotion, rather than hiding an occurrence.
++// Deliberately bounded to leaf row indexes and source row matrices in this fixture.
++pub fn observations(blocks: Vec<Vec<u8>>, external: Option<Vec<Vec<u8>>>) -> Result<Vec<(u32, Result<[u8;8], String>)>, String> {
++    let h = Heap::new(blocks)?;
++    if h.client_sig != 0x7c { return Err("not a TC".into()); }
++    let i = h.item(h.user_root)?;
++    if i.len()<22 || i[0]!=0x7c || i.len()!=22+i[1] as usize*8 { return Err("TC header length/signature".into()); }
++    let width=u16b(i,8); let ceb=u16b(i,6);
++    if width<4 || ceb<4 || ceb>=width { return Err("TC row dimensions".into()); }
++    let cols:Vec<_>=i[22..].chunks_exact(8).collect();
++    let ids:Vec<_>=cols.iter().filter(|c| u32b(c,0)>>16==0x67f2).collect();
++    if ids.len()!=1 || u32b(ids[0],0)!=0x67f20003 || u16b(ids[0],4)!=0 || ids[0][6]!=4 { return Err("row identity descriptor".into()); }
++    let idbit=ids[0][7] as usize;
++    if ceb+idbit/8>=width { return Err("row identity bit bounds".into()); }
++    let times:Vec<_>=cols.iter().filter(|c| u32b(c,0)>>16==0x3008).collect();
++    let bh=h.item(u32b(i,10))?;
++    if bh.len()!=8 || bh[..4]!=[0xb5,4,4,0] { return Err("unsupported row-index BTH".into()); }
++    let index=h.item(u32b(bh,4))?;
++    if index.len()%8!=0 { return Err("row-index length".into()); }
++    let rm=u32b(i,14);
++    let matrix=if rm&31!=0 { external.ok_or("missing row subnode")? } else { vec![h.item(rm)?.to_vec()] };
++    if matrix.iter().any(|b| b.len()%width!=0) { return Err("source row block padding unsupported".into()); }
++    let rows=matrix.concat();
++    if rows.len()%width!=0 || rows.len()/width!=index.len()/8 { return Err("row/index count or padding".into()); }
++    let mut seen=std::collections::HashSet::new();
++    let mut out=Vec::new();
++    for entry in index.chunks_exact(8) {
++        let nid=u32b(entry,0); let ix=u32b(entry,4) as usize;
++        if ix>=rows.len()/width || !seen.insert(ix) { return Err("row-index identity/duplicate".into()); }
++        let r=&rows[ix*width..(ix+1)*width];
++        if u32b(r,0)!=nid || r[ceb+idbit/8] & (0x80>>(idbit%8))==0 { return Err("row identity mismatch/absent".into()); }
++        let value=(|| {
++            if times.is_empty() { return Err("missing cache descriptor".into()); }
++            if times.len()!=1 { return Err("duplicate cache descriptor".into()); }
++            let c=times[0]; let off=u16b(c,4); let bit=c[7] as usize;
++            if u32b(c,0)!=0x30080040 || c[6]!=8 || off+8>ceb || ceb+bit/8>=width { return Err("invalid cache type/length/bounds".into()); }
++            if r[ceb+bit/8] & (0x80>>(bit%8))==0 { return Err("missing cache cell".into()); }
++            let v:[u8;8]=r[off..off+8].try_into().unwrap();
++            let n=u64::from_le_bytes(v);
++            // Zero/signed-high sentinel values are not validated usable FILETIMEs.
++            if n==0 || n>i64::MAX as u64 { return Err("invalid cache FILETIME".into()); }
++            Ok(v)
++        })();
++        out.push((nid,value));
++    }
++    Ok(out)
++}
++
++// Shared selection seam used by conversion and output-level policy guards.
++pub fn eligible(existing:bool, obs:&[Result<[u8;8],String>], tables_valid:bool)->(&'static str,Option<[u8;8]>) {
++    if existing { return ("preserved_existing",None); }
++    if !tables_valid { return ("unresolved_table_validation",None); }
++    if obs.is_empty() { return ("unresolved_missing_cache",None); }
++    if obs.iter().any(|v| match v { Err(_)=>true, Ok(b)=> {let n=u64::from_le_bytes(*b); n==0 || n>i64::MAX as u64} }) { return ("unresolved_invalid_or_missing_cache",None); }
++    if obs.iter().any(|v|v.as_ref().unwrap()!=obs[0].as_ref().unwrap()) { return ("unresolved_conflicting_cache",None); }
++    ("promoted_exact_same_nid_cache",Some(*obs[0].as_ref().unwrap()))
++}
++
++pub fn plan(pst:&mut Pst,nodes:&[Node])->Result<BTreeMap<u32,[u8;8]>,String> {
++    let mut all:BTreeMap<u32,Vec<(u32,Result<[u8;8],String>)>>=BTreeMap::new();
++    let mut table_errors=Vec::new();
++    for n in nodes.iter().filter(|n| matches!(n.nid_type(),14|15|16)) {
++        let read=(|| {
++            let blocks=pst.node_blocks(n.bid_data)?;
++            let h=Heap::new(blocks.clone())?;
++            let info=h.item(h.user_root)?;
++            if info.len()<22 { return Err("short TC header".into()); }
++            let rm=u32b(info,14);
++            let external=if rm&31!=0 {
++                let subs=pst.subnodes(n.bid_sub)?;
++                let sub=subs.get(&rm).ok_or("missing row subnode")?;
++                Some(pst.node_blocks(sub.data)?)
++            } else { None };
++            observations(blocks,external)
++        })();
++        match read {
++            Ok(rows)=>for (nid,v) in rows { all.entry(nid).or_default().push((n.nid,v)); },
++            Err(e)=>table_errors.push(format!("{:08x}:{}",n.nid,e)),
++        }
++    }
++    let mut result=BTreeMap::new();
++    for n in nodes.iter().filter(|n| matches!(n.nid_type(),4|8)) {
++        let h=Heap::new(pst.node_blocks(n.bid_data)?)?;
++        if h.client_sig!=0xbc { return Err("message not a PC".into()); }
++        let (key,rs)=bth_records(&h)?;
++        if key!=2 || rs.iter().any(|r| r.len()!=8) { return Err("invalid message PC records".into()); }
++        let existing=rs.iter().any(|r| u16b(r,0)==0x3008);
++        let obs=all.get(&n.nid).cloned().unwrap_or_default();
++        let refs=obs.iter().map(|(t,_)|format!("{:08x}",t)).collect::<Vec<_>>().join(",");
++        let values=obs.iter().map(|(_,v)|v.clone()).collect::<Vec<_>>();
++        let (reason,value)=eligible(existing,&values,table_errors.is_empty());
++        if let Some(v)=value { result.insert(n.nid,v); }
++        println!("Q12 nid={:08x} kind={} reason={} source_tables={} occurrences={}",n.nid,n.nid_type(),reason,refs,obs.len());
++    }
++    for e in table_errors { println!("Q12_TABLE unresolved={e}"); }
++    Ok(result)
++}
++
++// Actual writer seam: preserve every existing allocation/HID and PC record byte;
++// append one allocation, insert one sorted property record. No general relocator.
++pub fn promote(mut blocks:Vec<Vec<u8>>, value:[u8;8])->Result<Vec<Vec<u8>>,String> {
++    let h=Heap::new(blocks.clone())?;
++    if h.client_sig!=0xbc { return Err("not PC".into()); }
++    let bh=h.item(h.user_root)?;
++    if bh.len()!=8 || bh[..4]!=[0xb5,2,6,0] { return Err("unsupported PC BTH".into()); }
++    let root=u32b(bh,4); let records=h.item(root)?;
++    if records.len()%8!=0 { return Err("PC record length".into()); }
++    if records.chunks_exact(8).any(|r|u16b(r,0)==0x3008) { return Ok(blocks); }
++    if u64::from_le_bytes(value)==0 || u64::from_le_bytes(value)>i64::MAX as u64 { return Err("unvalidated FILETIME".into()); }
++    let last=blocks.len()-1;
++    let count=u16b(&blocks[last],u16b(&blocks[last],0));
++    if count>=2047 { return Err("allocation index overflow".into()); }
++    let hid=((last as u32)<<16)|(((count+1) as u32)<<5);
++    let mut rs:Vec<Vec<u8>>=records.chunks_exact(8).map(|r|r.to_vec()).collect();
++    if rs.windows(2).any(|r|u16b(&r[0],0)>=u16b(&r[1],0)) { return Err("PC key order".into()); }
++    let mut record=vec![0x08,0x30,0x40,0]; record.extend(hid.to_le_bytes()); rs.push(record); rs.sort_by_key(|r|u16b(r,0));
++    let updated=rs.concat();
++    for (bi,b) in blocks.iter_mut().enumerate() {
++        let map=u16b(b,0); let count=u16b(b,map); let start=u16b(b,map+4);
++        let extra=usize::from(bi==last);
++        let mut out=b[..start].to_vec(); let mut offsets=Vec::new(); let mut free=0u16;
++        for ai in 1..=count+extra {
++            offsets.push(out.len() as u16);
++            let id=((bi as u32)<<16)|((ai as u32)<<5);
++            let v=if ai>count { &value[..] } else if id==root { &updated } else { h.item(id)? };
++            if v.is_empty(){free+=1;} out.extend(v);
++        }
++        offsets.push(out.len() as u16);
++        // HNPAGEMAP must be aligned even when the last allocation has odd length.
++        if out.len()%2!=0 { out.push(0); }
++        let map=out.len();
++        out.extend(((count+extra) as u16).to_le_bytes()); out.extend(free.to_le_bytes());
++        for x in offsets { out.extend(x.to_le_bytes()); }
++        if out.len()>8176 { return Err("Q12 expansion needs heap relocation".into()); }
++        out[..2].copy_from_slice(&(map as u16).to_le_bytes()); *b=out;
++    }
++    Ok(blocks)
++}

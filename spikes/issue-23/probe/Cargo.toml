@@ -1,0 +1,9 @@
+[package]
+name = "pstoff-public-spike23"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pstfree = { path = "/home/watermelon/.local/share/pstoff-spike23/source/pstfree-final" }
+outlook-pst = { path = "/tmp/pstoff20-microsoft-ybi13kkw/repo/crates/pst" }
