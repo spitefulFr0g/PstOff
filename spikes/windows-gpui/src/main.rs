@@ -1,7 +1,6 @@
 //! Synthetic Windows feasibility probe. This does not inspect or convert mail.
 use gpui::{
-    App, Context, Div, ExternalPaths, FocusHandle, PathPromptOptions, Role, Stateful, Window,
-    WindowOptions, div, prelude::*, rgb,
+    App, Context, Div, ExternalPaths, PathPromptOptions, Stateful, Window, WindowOptions, div, prelude::*, rgb,
 };
 use std::path::PathBuf;
 use std::sync::{
@@ -18,7 +17,6 @@ struct Work {
 }
 
 struct Probe {
-    focus: FocusHandle,
     status: String,
     percent: u64,
     work: Option<Arc<Work>>,
@@ -134,52 +132,35 @@ impl Probe {
 fn button(
     id: &'static str,
     label: &'static str,
-    tab_index: isize,
     cx: &Context<Probe>,
     activate: impl Fn(&mut Probe, &mut Context<Probe>) + Copy + 'static,
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .tab_index(tab_index)
-        .role(Role::Button)
-        .aria_label(label)
         .p_3()
         .rounded_md()
         .bg(rgb(0x305f9e))
         .text_color(rgb(0xffffff))
         .border_2()
         .border_color(rgb(0x305f9e))
-        .focus(|style| style.border_color(rgb(0xffffff)))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, cx)))
         .child(label)
 }
 
 impl Render for Probe {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().id("probe").track_focus(&self.focus).tab_group().size_full()
+        div().id("probe").size_full()
             .flex().flex_col().gap_4().p_6().bg(rgb(0x18212b)).text_color(rgb(0xffffff))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.select(paths.0.to_vec(), cx)))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                match event.keystroke.key.as_str() {
-                    "tab" if event.keystroke.modifiers.shift => window.focus_prev(cx),
-                    "tab" => window.focus_next(cx),
-                    "b" => this.browse(false, cx),
-                    "d" => this.browse(true, cx),
-                    "s" => this.start(cx),
-                    "escape" => this.cancel(),
-                    _ => return,
-                }
-                cx.stop_propagation();
-            }))
             .child(div().text_xl().child("PstOff — GPUI Windows feasibility"))
             .child("Synthetic inputs only. This probe never reads or converts mail.")
-            .child("Drop synthetic .ost paths here. Shortcuts: B Browse, D Destination, S Start, Esc Cancel.")
+            .child("Drop synthetic .ost paths here or click Browse. Use the buttons to choose a destination, start or cancel work.")
             .child(div().flex().flex_wrap().gap_3()
-                .child(button("browse", "Browse synthetic OSTs", 0, cx, |this, cx| this.browse(false, cx)))
-                .child(button("destination", "Choose destination", 1, cx, |this, cx| this.browse(true, cx)))
-                .child(button("start", "Start synthetic work", 2, cx, |this, cx| this.start(cx)))
-                .child(button("cancel", "Cancel work", 3, cx, |this, _| this.cancel())))
-            .child(div().id("progress").role(Role::Status).aria_label(format!("Synthetic progress {} percent. {}", self.percent, self.status))
+                .child(button("browse", "Browse synthetic OSTs", cx, |this, cx| this.browse(false, cx)))
+                .child(button("destination", "Choose destination", cx, |this, cx| this.browse(true, cx)))
+                .child(button("start", "Start synthetic work", cx, |this, cx| this.start(cx)))
+                .child(button("cancel", "Cancel work", cx, |this, _| this.cancel())))
+            .child(div().id("progress")
                 .child(format!("{}% — {}", self.percent, self.status)))
     }
 }
@@ -191,16 +172,11 @@ fn main() {
             cx.quit();
         })
         .detach();
-        cx.open_window(WindowOptions::default(), |window, cx| {
-            cx.new(|cx| {
-                let focus = cx.focus_handle();
-                window.focus(&focus, cx);
-                Probe {
-                    focus,
-                    status: "Ready for synthetic checks.".into(),
-                    percent: 0,
-                    work: None,
-                }
+        cx.open_window(WindowOptions::default(), |_, cx| {
+            cx.new(|_| Probe {
+                status: "Ready for synthetic checks.".into(),
+                percent: 0,
+                work: None,
             })
         })
         .expect("open GPUI probe window");

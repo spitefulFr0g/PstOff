@@ -12,6 +12,12 @@ probe is not the full wizard.
 
 ## Measured results
 
+The build and runtime results below describe earlier source revisions. The
+#44 scope update removed custom accessibility and keyboard/focus support from
+the probe after those checks. No tests, builds or smoke checks were run for
+that update; prior build/runtime evidence is stale for the revised source.
+Historical attempt-4 evidence remains unchanged.
+
 Windows-hosted debug and release builds passed in an offline Windows Sandbox
 using Rust stable MSVC 1.99.1, MSVC 14.44.35207 and Windows SDK 10.0.26100.0.
 The debug probe opened a real window, displayed synthetic background progress
@@ -27,10 +33,11 @@ unsigned release opened in a fresh offline guest without checkout/cache/toolchai
 mappings. Native multiple-file Browse (spaces, Unicode and uppercase extension),
 invalid-extension rejection, Explorer multi-file drop, destination selection and
 cancellation, synthetic progress/cancel/restart, and unchanged source hashes were
-observed. UI Automation exposed four named, focusable buttons and a named status.
-Keyboard tab stops and duplicate Enter/Space activation found during the spike
-were corrected using GPUI's tab-group and built-in click activation APIs. Exact
-source revisions, final retests and artifact hashes belong to the task report.
+observed. Earlier source exposed named, focusable buttons and a named status
+to UI Automation and included keyboard/tab support. Those observations are
+historical; the #44 update removes the probe's custom accessibility metadata,
+focus/tab support and keyboard handlers. Exact source revisions, final retests
+and artifact hashes belong to the task report.
 Do not distribute the earlier dynamically linked executable as self-contained.
 
 Attempt evidence includes source SHAs, guest commands/configurations, exit
@@ -44,9 +51,16 @@ The probe never opens selected files or converts mail. It exercises native
 multi-file and directory prompts, extension validation and Explorer drop
 callbacks. A synthetic worker runs off the UI thread; a foreground observer
 marshals progress and completion. Cancel and close request cooperative stop.
-Buttons expose accessible names and roles, keyboard shortcuts, Tab traversal
-and Enter/Space activation. These mechanisms need practical interaction and
-screen-reader verification; source presence alone does not pass those gates.
+The probe is mouse-driven: click the visibly labeled buttons to browse, choose
+a destination, start or cancel work, or drop synthetic paths into the window.
+Progress and status remain visible.
+
+Per #44, PstOff v1 has no accessibility features. The product does not add
+custom screen-reader narration, explicit accessibility labels/roles, or
+accessibility-specific keyboard/focus behavior, and has no accessibility
+acceptance requirements (including Narrator/NVDA, contrast/scaling or human
+accessibility review). This scope decision makes no claim that Windows itself
+or all GPUI defaults have been made unreadable to assistive technology.
 
 `pstoff-engine::platform` classifies Win32 sharing/lock violations (32/33)
 separately from disk-full errors (39/112), retaining unknown error codes.
@@ -136,10 +150,9 @@ upstream roots at the packaged VCS SHA for 332 packages, including British-spell
 until missing attribution and applicable notice obligations are resolved.
 
 Required remaining checks include real Explorer multi-file drop; native
-selection/cancellation including Unicode and invalid paths; keyboard focus
-and resizing during work; Narrator/NVDA announcements and contrast/scaling by
-a human; quota-limited space/access-denied cases; clean offline static-release
-startup; runtime imports/assets; and the supported Windows/GPU/driver matrix.
+selection/cancellation including Unicode and invalid paths; mouse operation
+and resizing during work; quota-limited space/access-denied cases; clean offline
+static-release startup; runtime imports/assets; and the supported Windows/GPU/driver matrix.
 Record any completed subset explicitly. A single Sandbox does not validate
-the whole deployment or accessibility matrix. No upload or release is
+the whole deployment matrix. No upload or release is
 permitted from this spike, and no push/PR is permitted before acceptance.
