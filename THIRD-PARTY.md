@@ -27,3 +27,12 @@ unicode-ident and windows-link. All offer MIT, with unicode-ident additionally
 requiring Unicode-3.0, a permissive notice license compatible with MIT.
 Keep that additional notice in distributions. The imported pstfree library
 sources are byte-for-byte upstream; only the manifest/package name changed.
+
+Writer identity hashing uses sha2 0.10.9 (MIT OR Apache-2.0), pinned by
+Cargo.lock. Its resolved additions are block-buffer, cfg-if, cpufeatures,
+crypto-common, digest, generic-array, libc, typenum and version_check.
+All provide permissive MIT-compatible licenses. version_check 0.9.5 uses the
+legacy manifest spelling `MIT/Apache-2.0`; its included LICENSE-MIT and
+LICENSE-APACHE were inspected. The verifier admits that exact package/version
+and spelling only. generic-array's build script performs compiler feature
+checks; every build remains sandboxed. Preserve these notices in packaging.

@@ -13,7 +13,11 @@ APPROVED = {
 metadata = json.load(sys.stdin)
 errors = []
 for package in metadata["packages"]:
-    if package.get("license") not in APPROVED:
+    legacy_version_check = (
+        package["name"] == "version_check" and package["version"] == "0.9.5"
+        and package.get("license") == "MIT/Apache-2.0"
+    )  # Inspected LICENSE-MIT and LICENSE-APACHE; upstream's legacy OR spelling.
+    if package.get("license") not in APPROVED and not legacy_version_check:
         errors.append(f"Unreviewed license: {package['name']} {package.get('license')}")
     if package["name"] == "gpui":
         errors.append("GPUI must remain outside Linux workspace resolution")

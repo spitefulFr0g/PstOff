@@ -1,6 +1,7 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
 mod reader;
+mod writer;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -205,15 +206,6 @@ pub enum BatchResult {
     },
 }
 
-fn unavailable() -> EngineError {
-    EngineError {
-        kind: ErrorKind::NotImplemented,
-        message:
-            "The OST reader and PST writer are not implemented yet; no conversion was performed."
-                .into(),
-        completed_files: Vec::new(),
-    }
-}
 /// Inspect a supported v36 OST without modifying the source.
 /// Unsupported formats and Windows sharing violations are explicit store outcomes.
 pub fn inspect(path: impl AsRef<Path>) -> Result<Inspection, EngineError> {
@@ -222,8 +214,8 @@ pub fn inspect(path: impl AsRef<Path>) -> Result<Inspection, EngineError> {
 /// Convert through the shared policy layer. Never reports success before a writer exists.
 pub fn convert(
     path: impl AsRef<Path>,
-    _options: &ConvertOptions,
-    _progress: &mut dyn ProgressSink,
+    options: &ConvertOptions,
+    progress: &mut dyn ProgressSink,
     cancel: &CancelToken,
 ) -> Result<Conversion, EngineError> {
     if cancel.is_cancelled() {
@@ -231,6 +223,116 @@ pub fn convert(
             completed_files: Vec::new(),
         });
     }
-    reader::validate(path.as_ref())?;
-    Err(unavailable())
+    let path = path.as_ref();
+    let (mut source, nodes, source_sha256) = reader::conversion_source(path)?;
+    let failure = |kind, message: String| EngineError {
+        kind,
+        message,
+        completed_files: vec![],
+    };
+    if options.base_name.is_empty()
+        || options.base_name.contains(['/', '\\'])
+        || options.base_name == "."
+        || options.base_name == ".."
+    {
+        return Err(failure(
+            ErrorKind::InvalidOptions,
+            "Choose a plain output base name.".into(),
+        ));
+    }
+    if !options.exclusions.is_empty() || options.split != Split::Off {
+        return Err(failure(
+            ErrorKind::NotImplemented,
+            "Split and exclusions require the conversion planner.".into(),
+        ));
+    }
+    let output = options
+        .destination
+        .join(format!("{}.pst", options.base_name));
+    if output.exists() {
+        return Err(failure(
+            ErrorKind::Collision,
+            "The output already exists.".into(),
+        ));
+    }
+    let temporary = options
+        .destination
+        .join(format!(".{}.pstoff-partial", options.base_name));
+    let display = format!(
+        "PstOff – {}",
+        path.file_stem().unwrap_or_default().to_string_lossy()
+    );
+    let differences = writer::write(&mut source, &nodes, &temporary, &display).map_err(|e| {
+        // A failed create_new must never delete a pre-existing temporary.
+        failure(ErrorKind::Io, e.to_string())
+    })?;
+    if cancel.is_cancelled() {
+        let _ = std::fs::remove_file(&temporary);
+        return Ok(Conversion::Cancelled {
+            completed_files: vec![],
+        });
+    }
+    let bytes = std::fs::metadata(&temporary)
+        .map_err(|e| failure(ErrorKind::Io, e.to_string()))?
+        .len();
+    let publish = std::fs::hard_link(&temporary, &output);
+    let _ = std::fs::remove_file(&temporary);
+    publish.map_err(|e| {
+        failure(
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                ErrorKind::Collision
+            } else {
+                ErrorKind::Io
+            },
+            e.to_string(),
+        )
+    })?;
+    progress.update(Progress {
+        fraction: 1.0,
+        current_folder: None,
+        done: 0,
+        total: 0,
+        part: 1,
+    });
+    Ok(Conversion::Complete(Box::new(ConversionReport {
+        schema_version: REPORT_SCHEMA_VERSION,
+        mailbox_completeness: MailboxCompleteness::Unknown,
+        source: path.into(),
+        source_sha256,
+        files: vec![OutputFile {
+            path: output,
+            bytes,
+            part: 1,
+        }],
+        folders: nodes
+            .iter()
+            .filter(|n| n.nid_type() == 4 || n.nid_type() == 8)
+            .fold(
+                std::collections::BTreeMap::<u32, FolderPart>::new(),
+                |mut all, n| {
+                    let folder = all.entry(n.nid_parent).or_insert(FolderPart {
+                        folder: FolderRef(n.nid_parent),
+                        part: 1,
+                        items: 0,
+                        bytes: 0,
+                    });
+                    folder.items += 1;
+                    if let Ok(pc) = pstoff_format::ltp::read_node_pc(&mut source, n) {
+                        if let Some(size) = pc.int(0x0e08).filter(|s| *s >= 0) {
+                            folder.bytes = folder.bytes.saturating_add(size as u64);
+                        }
+                    }
+                    all
+                },
+            )
+            .into_values()
+            .collect(),
+        skipped: vec![],
+        differences,
+        evidence: CompletenessEvidence {
+            headers_only: Evidence::NotChecked,
+            unreadable: Evidence::NotChecked,
+            external_references: Evidence::NotChecked,
+        },
+    })))
 }
