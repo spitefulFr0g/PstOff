@@ -7,6 +7,10 @@ use std::collections::BTreeMap;
 pub(super) struct Cell {
     pub kind: u16,
     pub bytes: Vec<u8>,
+    // PC payload subnodes are relocated recursively with their original local
+    // NID. Preserve that reference rather than also copying the payload into
+    // the heap (which inflates embedded-object composite sizes).
+    pub subnode: Option<u32>,
 }
 pub(super) type Properties = BTreeMap<u16, Cell>;
 fn u32at(b: &[u8], at: usize) -> Result<u32> {
@@ -51,7 +55,18 @@ pub(super) fn properties(source: &mut Pst, bid: u64, sub: u64) -> Result<Propert
                 let node = subs.get(&value).ok_or("Missing property payload subnode")?;
                 source.node_blocks(node.data)?.concat()
             };
-            if cells.insert(id, Cell { kind, bytes }).is_some() {
+            let subnode = (!inline(kind) && value & 31 != 0).then_some(value);
+            if cells
+                .insert(
+                    id,
+                    Cell {
+                        kind,
+                        bytes,
+                        subnode,
+                    },
+                )
+                .is_some()
+            {
                 return Err("Duplicate property".into());
             }
         }
@@ -187,6 +202,8 @@ pub(super) fn pc(
     for (id, cell) in cells {
         let value = if inline(cell.kind) {
             u32at(&cell.bytes, 0)?
+        } else if let Some(nid) = cell.subnode {
+            nid
         } else if cell.bytes.len() > 3580 {
             payload(&cell.bytes)?
         } else {

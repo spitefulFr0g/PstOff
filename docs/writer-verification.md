@@ -121,3 +121,58 @@ comparison, backend/frontend integration reviews and manual classic Outlook chec
 remain unresolved. No Faithful or complete writer acceptance PASS is claimed;
 only the first public strict-SCANPST milestone can be recorded as passing after
 its clean-source rerun. Nothing is pushed and no PR is opened.
+
+## Attempt 4: public-schema candidate, acceptance pending
+
+The attempt-3 files and evidence are preserved. The new ignored
+`public_schema_embedded_acceptance_artifact` case copies the hash-pinned public
+OST's complete indexed store, folders, templates and tables. It adds a synthetic
+attachment to message `0x200084`, preserving the original message properties,
+recipient subnodes and contents-table identity. The embedded message has the
+required message class/flags/search-key/timestamps, an empty recipient table from
+the public template, an inline binary property and a subnode-backed binary
+property. All new content is synthetic. Neither the pinned Microsoft reader nor
+the libpff allowed-difference list changed.
+
+The old scan log identifies missing receive/default-class/name maps, search
+metadata, templates, outgoing queue and HMP; missing folder counts/subfolder flags;
+orphan recovery; missing message class/flags/search-key/timestamps; Object size
+4321 versus computed 198; invalid attachment size and a mismatching attachment
+table row. These are separate failures. Libpff's old identifier `AttributeError`
+occurs when walking a missing root object. The two unexplained store additions
+are display-name/password properties omitted from the minimal source; the
+existing allowed list permits changing these properties, not adding them.
+
+The new candidate exposed a production defect: an embedded Object declared
+396 bytes, matching its source composite data streams, but serialization emitted
+414 bytes. The writer resolved a subnode-backed property into heap bytes while
+also retaining the original payload subnode, duplicating 16 payload bytes plus a
+two-byte heap-map entry. PC cells now preserve the local payload NID backed by
+the recursively relocated subtree. A regular conversion-seam regression checks
+content and declared/computed sizes. The new full-schema case checks attachment
+table identity/cells through Microsoft's table API and both embedded payloads
+through Microsoft NDB plus the separate test-only PC decoder.
+
+Format references: [MS-PST PtypObject](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/49457d57-820e-453d-bbc0-1d192a999814),
+[attachment table schema](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/47c336f7-2d9b-4f22-91c7-5bb422aaebbb),
+and [attachment property sizes](https://learn.microsoft.com/en-us/office/client-developer/outlook/mapi/pidtagattachsize-canonical-property).
+
+After preserving any existing candidate directory:
+
+```bash
+scripts/cargo-sandboxed test -p pstoff-engine --test writer public_schema_embedded -- --ignored --nocapture
+python3 scripts/libpff-check.py compare target/writer-fixtures/public-embedded/source.ost target/writer-fixtures/public-embedded/embedded.pst
+```
+
+This remains a fixture repair in progress, **not a structurally validated OST or
+PST**. Its appended source indexes/data do not regenerate the public OST's
+allocation maps; source allocation-map correctness remains unresolved. The output
+writer regenerates PST allocation maps, but strict SCANPST must still be measured.
+Attempt 4 runs no Windows checks while the separate GUI task occupies the sole
+Sandbox slot. Do not start or close that guest. After the slot becomes available,
+complete source allocation-map validation, run strict scan-only SCANPST through
+the maintained script, diagnose all remaining diagnostics, and rerun the original
+public strict-SCANPST milestone on the changed production code. Its previous PASS
+is historical, not a PASS for this commit. Keep the minimal fixture's 56-diagnostic
+failure and the high-level reader's Object-decoding limitation separate. Full
+writer acceptance and Faithful status remain blocked.

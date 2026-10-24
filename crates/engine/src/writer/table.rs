@@ -189,7 +189,14 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
                 } else {
                     row[*at..at + size].to_vec()
                 };
-                cells.insert(*tag, Cell { kind, bytes });
+                cells.insert(
+                    *tag,
+                    Cell {
+                        kind,
+                        bytes,
+                        subnode: None,
+                    },
+                );
             }
             if !cells.contains_key(&0x67f20003) || !cells.contains_key(&0x67f30003) {
                 return Err("Absent table row identity".into());

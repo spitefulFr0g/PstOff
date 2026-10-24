@@ -106,11 +106,16 @@ pub fn generated_store(nodes: &[(u32, u32, Vec<u8>)]) -> Vec<u8> {
     b
 }
 pub fn pc(cells: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+    pc_with_external(cells, &[])
+}
+pub fn pc_with_external(cells: &[(u16, u16, Vec<u8>)], external: &[(u16, u32)]) -> Vec<u8> {
     let mut allocations = vec![vec![0xb5, 2, 6, 0, 64, 0, 0, 0], Vec::new()];
     for (id, kind, bytes) in cells {
         allocations[1].extend_from_slice(&id.to_le_bytes());
         allocations[1].extend_from_slice(&kind.to_le_bytes());
-        if *kind == 3 {
+        if let Some((_, nid)) = external.iter().find(|(prop, _)| prop == id) {
+            allocations[1].extend_from_slice(&nid.to_le_bytes());
+        } else if *kind == 3 {
             allocations[1].extend_from_slice(bytes)
         } else {
             let hid = (allocations.len() as u32 + 1) * 32;
@@ -312,13 +317,32 @@ pub fn policy_table(cells: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
 }
 
 pub fn embedded_store() -> Vec<u8> {
+    embedded_store_with_external_payload(false)
+}
+pub fn embedded_store_external_payload() -> Vec<u8> {
+    embedded_store_with_external_payload(true)
+}
+fn embedded_store_with_external_payload(external: bool) -> Vec<u8> {
     let mut nodes = skeleton_nodes(pc(&[(0x0ff9, 0x102, vec![1; 16])]));
     nodes[6].2 = pc(&[
         (0x0e07, 3, 0x10u32.to_le_bytes().to_vec()),
         (0x0e08, 3, 1234u32.to_le_bytes().to_vec()),
     ]);
+    let mut embedded_pc = pc_with_external(
+        &[
+            (0x0e08, 3, 4321u32.to_le_bytes().to_vec()),
+            (0x4000, 0x102, vec![0x5a; 64]),
+        ],
+        if external { &[(0x4000, 0x7ff)] } else { &[] },
+    );
+    let embedded_size = if external {
+        (embedded_pc.len() + 16) as u32
+    } else {
+        4321
+    };
+    put32(&mut embedded_pc, 24, embedded_size);
     let mut object = 0x704u32.to_le_bytes().to_vec();
-    object.extend(4321u32.to_le_bytes());
+    object.extend(embedded_size.to_le_bytes());
     nodes.push((
         0x5000,
         0,
@@ -337,14 +361,7 @@ pub fn embedded_store() -> Vec<u8> {
             (0x370b, 3, u32::MAX.to_le_bytes().to_vec()),
         ]),
     ));
-    nodes.push((
-        0x5020,
-        0,
-        pc(&[
-            (0x0e08, 3, 4321u32.to_le_bytes().to_vec()),
-            (0x4000, 0x102, vec![0x5a; 64]),
-        ]),
-    ));
+    nodes.push((0x5020, 0, embedded_pc));
     nodes.push((0x5040, 0, vec![0x7b; 16]));
     let mut inner = vec![0; 32];
     inner[0] = 2;

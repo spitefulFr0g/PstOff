@@ -1,5 +1,7 @@
 #[path = "support/generated.rs"]
 mod generated;
+#[path = "support/public_embedded.rs"]
+mod public_embedded;
 mod support;
 use outlook_pst::{
     ndb::{node_id::NodeId, page::NodeBTreeEntry},
@@ -311,6 +313,12 @@ fn independent_small_pc(bytes: &[u8]) -> std::collections::BTreeMap<u16, Vec<u8>
         .collect()
 }
 fn independent_typed_small_pc(bytes: &[u8]) -> std::collections::BTreeMap<u16, (u16, Vec<u8>)> {
+    independent_typed_small_pc_with_payload(bytes, |_| panic!("unexpected external property"))
+}
+fn independent_typed_small_pc_with_payload(
+    bytes: &[u8],
+    mut payload: impl FnMut(u32) -> Vec<u8>,
+) -> std::collections::BTreeMap<u16, (u16, Vec<u8>)> {
     let word = |at| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) as usize;
     let item = |hid: u32| {
         assert_eq!(hid >> 16, 0);
@@ -325,14 +333,129 @@ fn independent_typed_small_pc(bytes: &[u8]) -> std::collections::BTreeMap<u16, (
         .map(|r| {
             let id = u16::from_le_bytes(r[..2].try_into().unwrap());
             let kind = u16::from_le_bytes(r[2..4].try_into().unwrap());
+            let hnid = u32::from_le_bytes(r[4..8].try_into().unwrap());
             let value = if kind == 3 {
                 r[4..8].to_vec()
+            } else if hnid & 31 != 0 {
+                payload(hnid)
             } else {
-                item(u32::from_le_bytes(r[4..8].try_into().unwrap())).to_vec()
+                item(hnid).to_vec()
             };
             (id, (kind, value))
         })
         .collect()
+}
+
+#[test]
+#[ignore = "requires the hash-pinned public fixture; writes persistent candidate files"]
+fn public_schema_embedded_acceptance_artifact() {
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/writer-fixtures");
+    let candidate = root.join("public-embedded");
+    std::fs::create_dir(&candidate).expect("preserve prior evidence before rerunning");
+    let (source, message, expected_size) = public_embedded::store(&root.join("example-2013.ost"));
+    let path = candidate.join("source.ost");
+    std::fs::write(&path, &source).unwrap();
+    let mut options = ConvertOptions::new(candidate, "embedded".into());
+    options.split = Split::Off;
+    let Conversion::Complete(report) =
+        convert(&path, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+    else {
+        panic!("cancelled")
+    };
+    assert_eq!(std::fs::read(&path).unwrap(), source);
+    use outlook_pst::messaging::{
+        message::{Message, UnicodeMessage},
+        store::{Store, UnicodeStore},
+    };
+    let store = UnicodeStore::read(std::rc::Rc::new(
+        UnicodePstFile::open(&report.files[0].path).unwrap(),
+    ))
+    .unwrap();
+    let entry = store
+        .properties()
+        .make_entry_id(NodeId::from(message))
+        .unwrap();
+    let message_api = UnicodeMessage::read(store, &entry, None).unwrap();
+    let table = message_api.attachment_table().unwrap();
+    let rows: Vec<_> = table.rows_matrix().collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(u32::from(rows[0].id()), 0x685);
+    let mut seen = std::collections::BTreeSet::new();
+    for (column, cell) in table
+        .context()
+        .columns()
+        .iter()
+        .zip(rows[0].columns(table.context()).unwrap())
+    {
+        if let Some(cell) = cell {
+            let value = table.read_column(&cell, column.prop_type()).unwrap();
+            seen.insert(column.prop_id());
+            if column.prop_id() == 0x3705 {
+                assert!(matches!(
+                    value,
+                    outlook_pst::ltp::prop_context::PropertyValue::Integer32(5)
+                ));
+            }
+            if column.prop_id() == 0x0e20 {
+                assert!(
+                    matches!(value, outlook_pst::ltp::prop_context::PropertyValue::Integer32(n) if n == expected_size as i32 + 38)
+                );
+            }
+        }
+    }
+    assert!([0x0e20, 0x3704, 0x3705, 0x370b, 0x67f2, 0x67f3]
+        .iter()
+        .all(|id| seen.contains(id)));
+    let pst = UnicodePstFile::open(&report.files[0].path).unwrap();
+    let node = pst.read_node(NodeId::from(message)).unwrap();
+    let subs = independent_subnodes(&pst, node.sub_node().unwrap());
+    let attachment = subs
+        .iter()
+        .find(|s| s.node() == NodeId::from(0x685u32))
+        .unwrap();
+    let props = independent_typed_small_pc(&pst.read_block(attachment.block()).unwrap());
+    assert_eq!(props[&0x3701].0, 0xd);
+    assert_eq!(props[&0x3705].1, 5u32.to_le_bytes());
+    let object = &props[&0x3701].1;
+    assert_eq!(object.len(), 8);
+    assert_eq!(
+        u32::from_le_bytes(object[4..].try_into().unwrap()),
+        expected_size
+    );
+    let below = independent_subnodes(&pst, attachment.sub_node().unwrap());
+    let embedded = below
+        .iter()
+        .find(|s| s.node() == NodeId::from(u32::from_le_bytes(object[..4].try_into().unwrap())))
+        .unwrap();
+    let nested = independent_subnodes(&pst, embedded.sub_node().unwrap());
+    let data = pst.read_block(embedded.block()).unwrap();
+    let actual_size = data.len()
+        + nested
+            .iter()
+            .map(|n| pst.read_block(n.block()).unwrap().len())
+            .sum::<usize>();
+    let props = independent_typed_small_pc_with_payload(&data, |nid| {
+        let sub = nested
+            .iter()
+            .find(|s| s.node() == NodeId::from(nid))
+            .unwrap();
+        pst.read_block(sub.block()).unwrap()
+    });
+    assert_eq!(
+        props[&0x001a].1,
+        "IPM.Note"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(props[&0x4000].1, vec![0x5a; 64]);
+    assert_eq!(props[&0x4001].1, vec![0x7b; 16]);
+    assert_eq!(
+        actual_size, expected_size as usize,
+        "embedded composite data size changed during serialization"
+    );
+    eprintln!("public-schema embedded readback: message=0x{message:x} composite_bytes={actual_size} nested_subnodes={}", nested.len());
 }
 
 #[test]
@@ -705,6 +828,55 @@ fn embedded_message_properties_roundtrip_through_independent_ndb_reader() {
         panic!("cancelled")
     };
     verify_embedded_content(&report.files[0].path);
+    assert_eq!(std::fs::read(&f.source).unwrap(), source);
+}
+
+#[test]
+fn embedded_external_property_retains_content_and_declared_composite_size() {
+    let f = support::Fixture::invalid();
+    let source = generated::embedded_store_external_payload();
+    std::fs::write(&f.source, &source).unwrap();
+    let mut options = ConvertOptions::new(f.root.clone(), "external-embedded".into());
+    options.split = Split::Off;
+    let Conversion::Complete(report) =
+        convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+    else {
+        panic!("cancelled")
+    };
+    let pst = UnicodePstFile::open(&report.files[0].path).unwrap();
+    let node = pst.read_node(NodeId::from(0x124u32)).unwrap();
+    let subs = independent_subnodes(&pst, node.sub_node().unwrap());
+    let attachment = subs
+        .iter()
+        .find(|s| s.node() == NodeId::from(0x685u32))
+        .unwrap();
+    let props = independent_small_pc(&pst.read_block(attachment.block()).unwrap());
+    let object = &props[&0x3701];
+    let declared_size = u32::from_le_bytes(object[4..8].try_into().unwrap()) as usize;
+    let subs = independent_subnodes(&pst, attachment.sub_node().unwrap());
+    let embedded = subs
+        .iter()
+        .find(|s| s.node() == NodeId::from(0x704u32))
+        .unwrap();
+    let nested = independent_subnodes(&pst, embedded.sub_node().unwrap());
+    let data = pst.read_block(embedded.block()).unwrap();
+    let actual_size = data.len()
+        + nested
+            .iter()
+            .map(|s| pst.read_block(s.block()).unwrap().len())
+            .sum::<usize>();
+    let props = independent_typed_small_pc_with_payload(&data, |nid| {
+        let sub = nested
+            .iter()
+            .find(|s| s.node() == NodeId::from(nid))
+            .unwrap();
+        pst.read_block(sub.block()).unwrap()
+    });
+    assert_eq!(props[&0x4000].1, vec![0x7b; 16]);
+    assert_eq!(
+        declared_size, actual_size,
+        "serialization inflated the embedded object without updating its reference"
+    );
     assert_eq!(std::fs::read(&f.source).unwrap(), source);
 }
 

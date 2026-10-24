@@ -52,7 +52,14 @@ pub(super) fn prepare(
             .get(&id)
             .is_none_or(|c| c.kind != kind || c.bytes != bytes)
         {
-            cells.insert(id, Cell { kind, bytes });
+            cells.insert(
+                id,
+                Cell {
+                    kind,
+                    bytes,
+                    subnode: None,
+                },
+            );
             changes.push(Difference {
                 property: (id as u32) << 16 | kind as u32,
                 item: None,
