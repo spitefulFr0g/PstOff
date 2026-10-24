@@ -7,7 +7,8 @@ was a source investigation, not build evidence. Attempt 3 added a separate
 `spikes/windows-gpui` workspace pinned to `gpui-pre` and `gpui-pre-platform`
 0.3.9 (published snapshot of Zed 93d745668805029476e6d7fbb19652116fed51de).
 The engine workspace still resolves independently of GPUI. No framework was
-substituted and the wizard executable remains separate from this probe.
+substituted. The root `pstoff-gui` binary remains a failure stub; this separate
+probe is not the full wizard.
 
 ## Measured results
 
@@ -21,8 +22,15 @@ exposed a deployment failure in the initial release executable: it imported
 `VCRUNTIME140.dll`, absent from that guest, and exited with `0xC0000135` before
 opening a window. Its size was 10,361,856 bytes; SHA-256 was
 `1651409e38c708327def6260d65cecbc801d6faacf339050ba38c086145c3365`.
-The checked-in Windows target configuration now requests static CRT linking;
-its final clean-guest result must be recorded separately from that first build.
+Static CRT linking removed that direct VC-runtime dependency. A subsequent
+unsigned release opened in a fresh offline guest without checkout/cache/toolchain
+mappings. Native multiple-file Browse (spaces, Unicode and uppercase extension),
+invalid-extension rejection, Explorer multi-file drop, destination selection and
+cancellation, synthetic progress/cancel/restart, and unchanged source hashes were
+observed. UI Automation exposed four named, focusable buttons and a named status.
+Keyboard tab stops and duplicate Enter/Space activation found during the spike
+were corrected using GPUI's tab-group and built-in click activation APIs. Exact
+source revisions, final retests and artifact hashes belong to the task report.
 Do not distribute the earlier dynamically linked executable as self-contained.
 
 Attempt evidence includes source SHAs, guest commands/configurations, exit
@@ -122,9 +130,9 @@ copyright, license and NOTICE material when packaging. The project and
 preserved pstfree fork's existing notices also remain binding where used.
 
 Notice collection recovered files from crate archives and, where omitted,
-upstream roots at the packaged VCS SHA for 331 packages. Exact-revision notice
-collection remains unresolved for `seahash 4.1.0`, `simd_helpers 0.1.0` and
-`windows-capture 1.5.0`, all declaring MIT. Do not call redistribution cleared
+upstream roots at the packaged VCS SHA for 332 packages, including British-spelled
+`LICENCE` files. Exact-revision notice collection remains unresolved for
+`seahash 4.1.0` and `simd_helpers 0.1.0`, both declaring MIT. Do not call redistribution cleared
 until missing attribution and applicable notice obligations are resolved.
 
 Required remaining checks include real Explorer multi-file drop; native
