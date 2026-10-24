@@ -179,7 +179,7 @@ impl Render for Probe {
             .child(div().text_xl().child("PstOff — GPUI Windows feasibility"))
             .child("Synthetic inputs only. This probe never reads or converts mail.")
             .child("Drop synthetic .ost paths here. Shortcuts: B Browse, D Destination, S Start, Esc Cancel.")
-            .child(div().flex().gap_3()
+            .child(div().flex().flex_wrap().gap_3()
                 .child(button("browse", "Browse synthetic OSTs", cx, |this, cx| this.browse(false, cx)))
                 .child(button("destination", "Choose destination", cx, |this, cx| this.browse(true, cx)))
                 .child(button("start", "Start synthetic work", cx, |this, cx| this.start(cx)))
