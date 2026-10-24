@@ -74,11 +74,9 @@ impl Probe {
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {
-        if self
-            .work
-            .as_ref()
-            .is_some_and(|w| !w.finished.load(Ordering::Relaxed))
-        {
+        // Wait for the UI observer to finish before allowing another worker.
+        // Otherwise its final update could overwrite a newly started run.
+        if self.work.is_some() {
             return;
         }
         let work = Arc::new(Work::default());
@@ -111,6 +109,7 @@ impl Probe {
                                 "Synthetic work finished."
                             }
                             .into();
+                            this.work = None;
                         }
                         cx.notify();
                     })
