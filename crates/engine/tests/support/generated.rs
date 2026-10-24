@@ -274,7 +274,7 @@ pub fn policy_table(cells: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
         let size = if *kind == 0x40 { 8 } else { 4 };
         info[28 + i * 8] = size;
         info[29 + i * 8] = i as u8;
-        if *kind == 0x102 {
+        if matches!(*kind, 0x102 | 0x1f) {
             row.extend_from_slice(&((5 + values.len() as u32) * 32).to_le_bytes());
             values.push(bytes.clone());
         } else {
@@ -318,13 +318,23 @@ pub fn embedded_store() -> Vec<u8> {
         (0x0e08, 3, 1234u32.to_le_bytes().to_vec()),
     ]);
     let mut object = 0x704u32.to_le_bytes().to_vec();
-    object.extend(0u32.to_le_bytes());
+    object.extend(4321u32.to_le_bytes());
     nodes.push((
         0x5000,
         0,
         pc(&[
+            (0x0e20, 3, 4321u32.to_le_bytes().to_vec()),
             (0x3701, 0x0d, object),
+            (
+                0x3704,
+                0x1f,
+                "synthetic.msg"
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            ),
             (0x3705, 3, 5u32.to_le_bytes().to_vec()),
+            (0x370b, 3, u32::MAX.to_le_bytes().to_vec()),
         ]),
     ));
     nodes.push((
@@ -343,7 +353,19 @@ pub fn embedded_store() -> Vec<u8> {
     put64(&mut inner, 16, 48);
     nodes.push((0x5060, 0, inner));
     // One attachment row, indexed by the actual attachment subnode NID.
-    let mut table = policy_table(&[(0x3705, 3, 5u32.to_le_bytes().to_vec())]);
+    let mut table = policy_table(&[
+        (0x0e20, 3, 4321u32.to_le_bytes().to_vec()),
+        (
+            0x3704,
+            0x1f,
+            "synthetic.msg"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+        ),
+        (0x3705, 3, 5u32.to_le_bytes().to_vec()),
+        (0x370b, 3, u32::MAX.to_le_bytes().to_vec()),
+    ]);
     let map = u16::from_le_bytes(table[..2].try_into().unwrap()) as usize;
     for offset in [8, 10] {
         let at =
@@ -351,24 +373,29 @@ pub fn embedded_store() -> Vec<u8> {
         put32(&mut table, at, 0x685);
     }
     // Added after the outer tree below, so its data BID is 60.
-    let mut outer = vec![0; 80];
+    let mut outer = vec![0; 56];
     outer[0] = 2;
-    put16(&mut outer, 2, 3);
-    put64(&mut outer, 8, 0x685);
-    put64(&mut outer, 16, 40);
-    put64(&mut outer, 32, 0x704);
-    put64(&mut outer, 40, 44);
-    put64(&mut outer, 48, 54);
-    put64(&mut outer, 56, 0x671);
-    put64(&mut outer, 64, 60);
-    // SLENTRY records must be sorted by NID.
-    outer[8..].rotate_right(24);
+    put16(&mut outer, 2, 2);
+    put64(&mut outer, 8, 0x671);
+    put64(&mut outer, 16, 60);
+    put64(&mut outer, 32, 0x685);
+    put64(&mut outer, 40, 40);
+    put64(&mut outer, 48, 66);
     nodes.push((0x5080, 0, outer));
     nodes.push((0x50a0, 0, table));
+    // Object payload belongs to the attachment's local subnode tree.
+    let mut attachment_subs = vec![0; 32];
+    attachment_subs[0] = 2;
+    put16(&mut attachment_subs, 2, 1);
+    put64(&mut attachment_subs, 8, 0x704);
+    put64(&mut attachment_subs, 16, 44);
+    put64(&mut attachment_subs, 24, 54);
+    nodes.push((0x50c0, 0, attachment_subs));
     let mut b = generated_store(&nodes);
     put64(&mut b, 4096 + 6 * 32 + 16, 58);
+    put64(&mut b, 4096 + 7 * 32 + 16, 66);
     put64(&mut b, 4096 + 8 * 32 + 16, 54);
-    for i in [10, 11] {
+    for i in [10, 11, 13] {
         let bid = 12 + i as u64 * 4 + 2;
         put64(&mut b, 4096 + i * 32 + 8, bid);
         put64(&mut b, 8192 + i * 24, bid);

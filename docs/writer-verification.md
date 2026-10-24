@@ -74,7 +74,9 @@ subnode payload. NDB indexes, subnode trees, decryption and data streams are rea
 by the unchanged pinned Microsoft reader. A small independent test-only decoder
 handles single-page leaf-BTH PCs; it does not call production format code.
 This is positive generated NDB/content coverage, not complete messaging coverage.
-The fixture now includes an attachment-present flag and indexed attachment table.
+The fixture now includes an attachment-present flag, indexed attachment table,
+required attachment fields, and the embedded object under the attachment's local
+subnode tree.
 Production writer serialization required no change for this case.
 
 The original high-level messaging reproduction remains ignored and fails on
@@ -99,9 +101,12 @@ scripts/cargo-sandboxed test -p pstoff-engine --test writer generated_embedded_a
 
 The target directory must have no prior `embedded.pst`; preserve old evidence
 before rerunning. This minimal generated store is **not SCANPST-clean**: the
-experiment reports 54 diagnostics with both scan input and original unchanged.
+latest experiment reports 56 diagnostics with both scan input and original unchanged.
 Libpff also fails: identifier-reader errors on both files and two unexplained
 store additions. Its graph comparison does not traverse this generated message.
+SCANPST also reports inconsistent synthetic object/attachment sizes and missing
+store/folder/message schema. These are remaining fixture/acceptance defects;
+positive raw content readback does not establish a valid Outlook message.
 Neither failure is waived or reclassified as PASS. The independent generated
 content check is narrower than Faithful acceptance.
 

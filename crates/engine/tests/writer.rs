@@ -755,7 +755,11 @@ fn verify_embedded_content(path: &std::path::Path) {
     let object = &props[&0x3701];
     assert_eq!(object.len(), 8);
     let embedded_id = NodeId::from(u32::from_le_bytes(object[..4].try_into().unwrap()));
-    let embedded = subs.iter().find(|s| s.node() == embedded_id).unwrap();
+    let attachment_subs = independent_subnodes(&pst, attachment.sub_node().unwrap());
+    let embedded = attachment_subs
+        .iter()
+        .find(|s| s.node() == embedded_id)
+        .unwrap();
     let props = independent_small_pc(&pst.read_block(embedded.block()).unwrap());
     assert_eq!(props[&0x0e08], 4321u32.to_le_bytes());
     assert_eq!(props[&0x4000], vec![0x5a; 64]);
