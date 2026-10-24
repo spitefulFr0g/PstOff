@@ -1,6 +1,7 @@
 //! Synthetic Windows feasibility probe. This does not inspect or convert mail.
 use gpui::{
-    App, Context, Div, ExternalPaths, PathPromptOptions, Stateful, Window, WindowOptions, div, prelude::*, rgb,
+    App, Context, Div, ExternalPaths, PathPromptOptions, Stateful, Window, WindowOptions, div,
+    prelude::*, rgb,
 };
 use std::path::PathBuf;
 use std::sync::{
