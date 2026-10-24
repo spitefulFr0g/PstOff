@@ -382,6 +382,7 @@ pub struct Pst {
     /// Everything survivable that looked wrong on the way through. This is the seed of
     /// the damage report — the thing the paid tools replace with a progress bar.
     pub warnings: Vec<String>,
+    strict: bool,
     /// Total problems seen, including any past the listing cap.
     suppressed: usize,
 }
@@ -418,7 +419,16 @@ impl Pst {
     }
 
     pub fn open(path: &str) -> Result<Pst, String> {
-        let mut file = File::open(path).map_err(|e| format!("{path}: {e}"))?;
+        let file = File::open(path).map_err(|e| e.to_string())?;
+        Self::read_file(file, false)
+    }
+
+    /// Read from an already opened read-only handle, preserving sharing restrictions.
+    pub fn from_file(file: File) -> Result<Pst, String> {
+        Self::read_file(file, true)
+    }
+
+    fn read_file(mut file: File, strict: bool) -> Result<Pst, String> {
         let actual_len = file.metadata().map_err(|e| e.to_string())?.len();
 
         // Read what is there rather than requiring a full header, so a file that is a PST
@@ -427,24 +437,22 @@ impl Pst {
         file.by_ref()
             .take(HEADER_LEN as u64)
             .read_to_end(&mut h)
-            .map_err(|e| format!("{path}: {e}"))?;
+            .map_err(|e| e.to_string())?;
 
         if h.len() < 4 || u32le(&h, 0) != MAGIC {
-            return Err(format!(
-                "{path}: no !BDN signature. This is not a PST or OST file."
-            ));
+            return Err("container: no !BDN signature. This is not a PST or OST file.".into());
         }
         // The ANSI header is 512 bytes and the Unicode one 564, and which it is cannot be
         // known until wVer has been read — which is inside the 512 both have.
         if h.len() < ANSI_HEADER_LEN {
             return Err(format!(
-                "{path}: has a PST signature but is only {actual_len} bytes - the header itself is cut short, so there is nothing left to recover from."
+                "container: has a PST signature but is only {actual_len} bytes - the header itself is cut short, so there is nothing left to recover from."
             ));
         }
         let ansi = matches!(u16le(&h, OFF_WVER), 14 | 15);
         if !ansi && h.len() < HEADER_LEN {
             return Err(format!(
-                "{path}: has a PST signature but is only {actual_len} bytes - the {HEADER_LEN}-byte header itself is cut short, so there is nothing left to recover from."
+                "container: has a PST signature but is only {actual_len} bytes - the {HEADER_LEN}-byte header itself is cut short, so there is nothing left to recover from."
             ));
         }
         let mut warnings = Vec::new();
@@ -548,6 +556,7 @@ impl Pst {
             nbt_root: page.bref(&h, off_nbt),
             bbt_root: page.bref(&h, off_bbt),
             bbt: None,
+            strict,
             suppressed: warnings.len(),
             warnings,
         })
@@ -559,7 +568,12 @@ impl Pst {
     }
 
     fn read_page(&mut self, at: Bref) -> Result<Vec<u8>, String> {
-        if at.ib == 0 || at.ib + self.page.size > self.actual_len {
+        if at.ib == 0
+            || at
+                .ib
+                .checked_add(self.page.size)
+                .is_none_or(|end| end > self.actual_len)
+        {
             return Err(format!(
                 "page offset {} is outside the file (file is {} bytes)",
                 at.ib, self.actual_len
@@ -597,6 +611,9 @@ impl Pst {
         let stored = self.page.trailer_crc(&buf, t);
         let found = crc32(&buf[..t]);
         if stored != found {
+            if self.strict {
+                return Err("Page checksum mismatch".into());
+            }
             self.warn(format!(
                 "page at {} fails its checksum (stored 0x{stored:08X}, computed 0x{found:08X}) — its contents are damaged",
                 at.ib
@@ -713,6 +730,12 @@ impl Pst {
                 nid_parent: u32le(e, w * 3),
             });
         });
+        if self.strict {
+            let mut ids = HashSet::new();
+            if out.iter().any(|node| !ids.insert(node.nid)) {
+                self.warn("Duplicate node id in the node index".into());
+            }
+        }
         out
     }
 
@@ -724,7 +747,16 @@ impl Pst {
     /// can be navigated without one.
     pub fn block(&mut self, bid: u64) -> Result<Vec<u8>, String> {
         if self.bbt.is_none() {
-            let map = self.blocks().into_iter().map(|b| (b.bid & !1, b)).collect();
+            let blocks = self.blocks();
+            if self.strict && !self.warnings.is_empty() {
+                return Err("The block index failed integrity checks".into());
+            }
+            let mut map = HashMap::new();
+            for block in blocks {
+                if map.insert(block.bid & !1, block).is_some() && self.strict {
+                    return Err("Duplicate block id in the block index".into());
+                }
+            }
             self.bbt = Some(map);
         }
         let b = *self
@@ -738,10 +770,13 @@ impl Pst {
         // to the format's block alignment.
         let back = self.page.block_trailer_back;
         let total = (b.cb as u64 + back).div_ceil(self.page.block_align) * self.page.block_align;
-        if b.ib + total > self.actual_len {
+        if b.ib
+            .checked_add(total)
+            .is_none_or(|end| end > self.actual_len)
+        {
             return Err(format!(
                 "block {bid} runs to offset {} but the file ends at {}",
-                b.ib + total,
+                b.ib.saturating_add(total),
                 self.actual_len
             ));
         }
@@ -771,6 +806,12 @@ impl Pst {
             b.cb as usize
         };
         let stored_crc = self.page.trailer_crc(&buf, t);
+        if b.cb as usize > t {
+            return Err("Block data overlaps its trailer".into());
+        }
+        if self.strict && u16le(&buf, t) != b.cb {
+            return Err("Block length disagrees with its index".into());
+        }
         buf.truncate(b.cb as usize);
 
         // Checked over the bytes as stored, before any decoding, because that is what the
@@ -778,6 +819,9 @@ impl Pst {
         // reports: the index is fine and the data underneath it has rotted.
         let found_crc = crc32(&buf);
         if stored_crc != found_crc {
+            if self.strict {
+                return Err("Block checksum mismatch".into());
+            }
             self.warn(format!(
                 "block {bid} at offset {} fails its checksum (stored 0x{stored_crc:08X}, computed 0x{found_crc:08X}) — {} bytes of damaged data",
                 b.ib, b.cb
@@ -798,9 +842,12 @@ impl Pst {
         }
 
         if inflated != b.cb as usize {
-            buf = miniz_oxide::inflate::decompress_to_vec_zlib(&buf)
+            buf = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&buf, inflated)
                 .map_err(|e| format!("block {bid} is compressed and would not inflate: {e:?}"))?;
             if buf.len() != inflated {
+                if self.strict {
+                    return Err("Inflated block length disagrees with its trailer".into());
+                }
                 self.warnings.push(format!(
                     "block {bid} inflated to {} bytes, its trailer said {inflated}",
                     buf.len()
@@ -816,6 +863,13 @@ impl Pst {
     /// XBLOCK — a list of block ids — or an XXBLOCK, a list of XBLOCKs. Kept as a list
     /// rather than concatenated because heap ids address a specific block by number.
     pub fn node_blocks(&mut self, bid: u64) -> Result<Vec<Vec<u8>>, String> {
+        self.node_blocks_inner(bid, 0)
+    }
+
+    fn node_blocks_inner(&mut self, bid: u64, depth: u8) -> Result<Vec<Vec<u8>>, String> {
+        if depth > 2 {
+            return Err("XBLOCK nesting exceeds two levels".into());
+        }
         if bid == 0 {
             return Ok(Vec::new());
         }
@@ -825,6 +879,9 @@ impl Pst {
             return Ok(vec![first]);
         }
         let level = first[1];
+        if !matches!(level, 1 | 2) {
+            return Err("Invalid XBLOCK level".into());
+        }
         let count = u16le(&first, 2) as usize;
         // An XBLOCK header is btype, cLevel, cEnt and lcbTotal in both formats, so it is
         // 8 bytes either way; only the id array below it changes width.
@@ -842,7 +899,7 @@ impl Pst {
         for c in children {
             match level {
                 // XXBLOCK: each entry is an XBLOCK, so recurse one level.
-                2 => out.extend(self.node_blocks(c)?),
+                2 => out.extend(self.node_blocks_inner(c, depth + 1)?),
                 _ => out.push(self.block(c)?),
             }
         }
@@ -865,6 +922,9 @@ impl Pst {
         let mut seen = HashSet::new();
         while let Some(b) = stack.pop() {
             if !seen.insert(b & !1) {
+                if self.strict {
+                    return Err("Subnode tree contains a cycle".into());
+                }
                 self.warnings
                     .push(format!("subnode tree loops back to block {b} — stopped"));
                 continue;
@@ -1199,7 +1259,10 @@ impl Pst {
     pub fn raw_block(&mut self, b: &Block) -> Result<Vec<u8>, String> {
         let back = self.page.block_trailer_back;
         let total = (b.cb as u64 + back).div_ceil(self.page.block_align) * self.page.block_align;
-        if b.ib + total > self.actual_len {
+        if b.ib
+            .checked_add(total)
+            .is_none_or(|end| end > self.actual_len)
+        {
             return Err(format!("block {} runs past the end of the file", b.bid));
         }
         let mut buf = vec![0u8; total as usize];

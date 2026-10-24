@@ -1,5 +1,6 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
+mod reader;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -213,13 +214,14 @@ fn unavailable() -> EngineError {
         completed_files: Vec::new(),
     }
 }
-/// Inspect without modifying the source. Reader support is added by the reader task.
-pub fn inspect(_path: impl AsRef<Path>) -> Result<Inspection, EngineError> {
-    Err(unavailable())
+/// Inspect a supported v36 OST without modifying the source.
+/// Unsupported formats and Windows sharing violations are explicit store outcomes.
+pub fn inspect(path: impl AsRef<Path>) -> Result<Inspection, EngineError> {
+    reader::inspect(path.as_ref())
 }
 /// Convert through the shared policy layer. Never reports success before a writer exists.
 pub fn convert(
-    _path: impl AsRef<Path>,
+    path: impl AsRef<Path>,
     _options: &ConvertOptions,
     _progress: &mut dyn ProgressSink,
     cancel: &CancelToken,
@@ -229,5 +231,6 @@ pub fn convert(
             completed_files: Vec::new(),
         });
     }
+    reader::validate(path.as_ref())?;
     Err(unavailable())
 }

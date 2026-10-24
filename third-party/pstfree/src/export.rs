@@ -795,6 +795,7 @@ mod tests {
 
     fn pc_with(props: &[(u16, Value)]) -> Pc {
         Pc {
+            types: BTreeMap::new(),
             props: props.iter().cloned().collect(),
             from_subnode: 0,
         }

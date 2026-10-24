@@ -1,15 +1,15 @@
 mod support;
 use pstoff_engine::{
-    convert, inspect, CancelToken, Conversion, ConvertOptions, ErrorKind, Split,
-    DEFAULT_SPLIT_BYTES,
+    convert, inspect, CancelToken, Conversion, ConvertOptions, ErrorKind, Split, Support,
+    UnsupportedReason, DEFAULT_SPLIT_BYTES,
 };
 #[test]
 fn rejected_generated_input_is_unchanged_and_publishes_nothing() {
     let fixture = support::Fixture::invalid();
     let before = std::fs::read(&fixture.source).unwrap();
     assert!(matches!(
-        inspect(&fixture.source).unwrap_err().kind,
-        ErrorKind::NotImplemented
+        inspect(&fixture.source).unwrap().support,
+        Support::Unsupported(UnsupportedReason::InvalidHeader)
     ));
     let options = ConvertOptions::new(fixture.root.clone(), "synthetic".into());
     assert!(matches!(
@@ -21,7 +21,7 @@ fn rejected_generated_input_is_unchanged_and_publishes_nothing() {
         )
         .unwrap_err()
         .kind,
-        ErrorKind::NotImplemented
+        ErrorKind::Unsupported(UnsupportedReason::InvalidHeader)
     ));
     assert_eq!(std::fs::read(&fixture.source).unwrap(), before);
     assert_eq!(std::fs::read_dir(&fixture.root).unwrap().count(), 1);
