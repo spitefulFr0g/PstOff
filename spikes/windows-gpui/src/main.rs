@@ -134,12 +134,13 @@ impl Probe {
 fn button(
     id: &'static str,
     label: &'static str,
+    tab_index: isize,
     cx: &Context<Probe>,
     activate: impl Fn(&mut Probe, &mut Context<Probe>) + Copy + 'static,
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .focusable()
+        .tab_index(tab_index)
         .role(Role::Button)
         .aria_label(label)
         .p_3()
@@ -151,7 +152,7 @@ fn button(
         .focus(|style| style.border_color(rgb(0xffffff)))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, cx)))
         .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space" | " ") {
                 activate(this, cx);
                 cx.stop_propagation();
             }
@@ -161,7 +162,7 @@ fn button(
 
 impl Render for Probe {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().id("probe").track_focus(&self.focus).size_full()
+        div().id("probe").track_focus(&self.focus).tab_group().size_full()
             .flex().flex_col().gap_4().p_6().bg(rgb(0x18212b)).text_color(rgb(0xffffff))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.select(paths.0.to_vec(), cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
@@ -180,10 +181,10 @@ impl Render for Probe {
             .child("Synthetic inputs only. This probe never reads or converts mail.")
             .child("Drop synthetic .ost paths here. Shortcuts: B Browse, D Destination, S Start, Esc Cancel.")
             .child(div().flex().flex_wrap().gap_3()
-                .child(button("browse", "Browse synthetic OSTs", cx, |this, cx| this.browse(false, cx)))
-                .child(button("destination", "Choose destination", cx, |this, cx| this.browse(true, cx)))
-                .child(button("start", "Start synthetic work", cx, |this, cx| this.start(cx)))
-                .child(button("cancel", "Cancel work", cx, |this, _| this.cancel())))
+                .child(button("browse", "Browse synthetic OSTs", 0, cx, |this, cx| this.browse(false, cx)))
+                .child(button("destination", "Choose destination", 1, cx, |this, cx| this.browse(true, cx)))
+                .child(button("start", "Start synthetic work", 2, cx, |this, cx| this.start(cx)))
+                .child(button("cancel", "Cancel work", 3, cx, |this, _| this.cancel())))
             .child(div().id("progress").role(Role::Status).aria_label(format!("Synthetic progress {} percent", self.percent))
                 .child(format!("{}% — {}", self.percent, self.status)))
     }
@@ -192,9 +193,8 @@ impl Render for Probe {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
+            // This probe owns one GPUI window; closing it always ends the app.
+            cx.quit();
         })
         .detach();
         cx.open_window(WindowOptions::default(), |window, cx| {
