@@ -1,6 +1,6 @@
 //! Rebuild table storage and contents caches without interpreting property payloads.
 use super::{
-    context::{self, Cell, HeapBuilder, Properties},
+    context::{Cell, HeapBuilder, Properties},
     p16, p32, Result, MAX,
 };
 use crate::{Difference, FolderRef, ItemRef};
@@ -8,7 +8,7 @@ use pstoff_format::{
     ltp::Heap,
     ndb::{Node, Pst},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 fn u16at(b: &[u8], at: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(
         b.get(at..at + 2).ok_or("Truncated table")?.try_into()?,
@@ -20,14 +20,40 @@ fn u32at(b: &[u8], at: usize) -> Result<u32> {
     ))
 }
 fn variable(kind: u16) -> bool {
-    matches!(kind, 0x1e | 0x1f | 0x102 | 0x0d) || kind & 0x1000 != 0
+    matches!(kind, 0x1e | 0x1f | 0x102 | 0x0d | 0x48) || kind & 0x1000 != 0
 }
 pub(super) struct Table {
     columns: Vec<(u32, usize)>,
-    rows: Vec<(u32, u32, Properties)>,
+    pub(super) pair_cache: bool,
+    pub(super) time_cache: bool,
+    pub(super) rows: Vec<(u32, u32, Properties)>,
 }
 pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
-    let heap = Heap::new(source.node_blocks(bid)?)?;
+    let blocks = source.node_blocks(bid)?;
+    // Validate all allocation maps before accepting any source-backed cache value.
+    for (i, block) in blocks.iter().enumerate() {
+        let map = u16at(block, 0)? as usize;
+        let count = u16at(block, map)? as usize;
+        let header = if i == 0 {
+            12
+        } else if i % 128 == 8 {
+            66
+        } else {
+            2
+        };
+        if map < header || map + 6 + count * 2 > block.len() {
+            return Err("Invalid table heap map".into());
+        }
+        let mut previous = header;
+        for n in 0..=count {
+            let offset = u16at(block, map + 4 + n * 2)? as usize;
+            if offset < previous || offset > map {
+                return Err("Overlapping table heap allocation".into());
+            }
+            previous = offset;
+        }
+    }
+    let heap = Heap::new(blocks)?;
     let info = heap.item(heap.user_root)?;
     if info.len() < 22 || info[0] != 0x7c {
         return Err("Invalid table context".into());
@@ -48,6 +74,80 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             ))
         })
         .collect::<Result<Vec<_>>>()?;
+    if heap.client_sig != 0x7c
+        || info.len() != 22 + columns.len() * 8
+        || u16at(info, 2)? > u16at(info, 4)?
+        || u16at(info, 4)? as usize > ceb
+    {
+        return Err("Invalid table header boundaries".into());
+    }
+    let mut tags = BTreeSet::new();
+    let mut bits = BTreeSet::new();
+    let mut occupied = BTreeSet::new();
+    for (tag, at, size, bit) in &columns {
+        let kind = *tag as u16;
+        let required = match kind {
+            2 => 2,
+            0xb => 1,
+            3 | 4 | 0xa => 4,
+            5 | 6 | 7 | 0x14 | 0x40 => 8,
+            0x48 => 4,
+            _ if variable(kind) => 4,
+            _ => return Err("Unsupported cache cell type".into()),
+        };
+        if !tags.insert(tag >> 16)
+            || !bits.insert(*bit)
+            || *size != required
+            || at + size > ceb
+            || bit / 8 >= width - ceb
+            || (*at..at + size).any(|n| !occupied.insert(n))
+        {
+            return Err(format!("Invalid table column layout tag={tag:08x} at={at} size={size} required={required} bit={bit} ceb={ceb} width={width}").into());
+        }
+    }
+    for (tag, at) in [(0x67f20003, 0), (0x67f30003, 4)] {
+        if !columns.iter().any(|c| c.0 == tag && c.1 == at && c.2 == 4) {
+            return Err("Missing table row identity descriptor".into());
+        }
+    }
+    let mut structural = BTreeSet::from([heap.user_root]);
+    let index_header = u32at(info, 10)?;
+    structural.insert(index_header);
+    let bth = heap.item(index_header)?;
+    if bth.len() != 8 || bth[..3] != [0xb5, 4, 4] || bth[3] > 32 {
+        return Err("Invalid table row index".into());
+    }
+    let mut pending = vec![(u32at(bth, 4)?, bth[3])];
+    let mut index = BTreeMap::new();
+    while let Some((hid, level)) = pending.pop() {
+        if hid == 0 {
+            continue;
+        }
+        if !structural.insert(hid) {
+            return Err("Aliased or cyclic table index".into());
+        }
+        let data = heap.item(hid)?;
+        if data.len() % 8 != 0 {
+            return Err("Truncated table row index".into());
+        }
+        let mut previous = None;
+        for record in data.chunks_exact(8) {
+            let key = u32at(record, 0)?;
+            if previous.is_some_and(|p| p >= key) {
+                return Err("Unsorted table index".into());
+            }
+            previous = Some(key);
+            if level == 0 {
+                if index.insert(key, u32at(record, 4)?).is_some() {
+                    return Err("Duplicate table index identity".into());
+                }
+            } else {
+                pending.push((u32at(record, 4)?, level - 1));
+            }
+        }
+    }
+    let matrix = u32at(info, 14)?;
+    structural.insert(matrix);
     let subs = source.subnodes(sub)?;
     let resolve = |source: &mut Pst, hnid: u32| -> Result<Vec<Vec<u8>>> {
         if hnid == 0 {
@@ -59,8 +159,13 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
         }
     };
     let mut rows = vec![];
+    let mut seen = BTreeSet::new();
     for block in resolve(source, u32at(info, 14)?)? {
         for row in block.chunks_exact(width) {
+            let id = u32at(row, 0)?;
+            if !seen.insert(id) || index.get(&id) != Some(&(rows.len() as u32)) {
+                return Err("Table row/index identity mismatch".into());
+            }
             let mut cells = Properties::new();
             for (tag, at, size, bit) in &columns {
                 if at + size > ceb || bit / 8 >= width - ceb {
@@ -71,16 +176,28 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
                 }
                 let kind = *tag as u16;
                 let bytes = if variable(kind) {
-                    resolve(source, u32at(row, *at)?)?.concat()
+                    let hnid = u32at(row, *at)?;
+                    if matches!(tag >> 16, 0x65e2 | 0x65e3) && structural.contains(&hnid) {
+                        return Err("Q15 cell aliases table structure".into());
+                    }
+                    resolve(source, hnid)?.concat()
                 } else {
                     row[*at..at + size].to_vec()
                 };
                 cells.insert((tag >> 16) as u16, Cell { kind, bytes });
             }
-            rows.push((u32at(row, 0)?, u32at(row, 4)?, cells));
+            if !cells.contains_key(&0x67f2) || !cells.contains_key(&0x67f3) {
+                return Err("Absent table row identity".into());
+            }
+            rows.push((id, u32at(row, 4)?, cells));
         }
     }
+    if rows.len() != index.len() {
+        return Err("Table row/index count mismatch".into());
+    }
     Ok(Table {
+        time_cache: columns.iter().any(|c| c.0 >> 16 == 0x3008),
+        pair_cache: columns.iter().any(|c| matches!(c.0 >> 16, 0x65e2 | 0x65e3)),
         columns: columns.into_iter().map(|(t, _, s, _)| (t, s)).collect(),
         rows,
     })
@@ -88,7 +205,7 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
 impl Table {
     pub fn rebuild_contents(
         &mut self,
-        source: &mut Pst,
+        planned: &BTreeMap<u32, Properties>,
         nodes: &[Node],
         nid: u32,
         differences: &mut Vec<Difference>,
@@ -98,7 +215,7 @@ impl Table {
                 .iter()
                 .find(|n| n.nid == *row)
                 .ok_or("Contents row has no Item")?;
-            let own = context::properties(source, node.bid_data, node.bid_sub)?;
+            let own = planned.get(row).ok_or("Missing planned Item properties")?;
             for (tag, _) in &self.columns {
                 let id = (tag >> 16) as u16;
                 let kind = *tag as u16;

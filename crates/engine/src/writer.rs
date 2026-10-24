@@ -1,4 +1,5 @@
 //! Unicode NDB emission. All offsets and references are assigned afresh.
+mod cache;
 mod context;
 mod store;
 mod table;
@@ -46,6 +47,7 @@ struct Output {
     nodes: Vec<Node>,
     differences: Vec<crate::Difference>,
     highwater: u32,
+    planned: std::collections::BTreeMap<u32, context::Properties>,
 }
 impl Output {
     // Reserve allocation-map slots, including PMAP/FMAP/FPMAP when applicable.
@@ -244,7 +246,7 @@ impl Output {
                 table
                     .as_mut()
                     .ok_or("Contents node is not a table")?
-                    .rebuild_contents(source, &self.nodes, nid, &mut self.differences)?;
+                    .rebuild_contents(&self.planned, &self.nodes, nid, &mut self.differences)?;
             }
             let mut entries = vec![];
             let mut subs: Vec<_> = source.subnodes(sub)?.into_iter().collect();
@@ -346,7 +348,8 @@ pub(super) fn write(
     path: &Path,
     display: &str,
 ) -> Result<Vec<crate::Difference>> {
-    let (store_cells, differences) = store::prepare(source, nodes, display)?;
+    let (store_cells, mut differences) = store::prepare(source, nodes, display)?;
+    let planned = cache::prepare(source, nodes, &mut differences)?;
     let file = std::fs::OpenOptions::new()
         .write(true)
         .read(true)
@@ -361,19 +364,21 @@ pub(super) fn write(
         nodes: nodes.to_vec(),
         differences,
         highwater: 1024,
+        planned,
     };
     let mut entries = Vec::new();
     for node in nodes {
+        let override_cells = if node.nid == 0x21 {
+            Some(store_cells.clone())
+        } else {
+            out.planned.get(&node.nid).cloned()
+        };
         let (data, sub) = out.context_with_cells(
             source,
             node.bid_data,
             node.bid_sub,
             0,
-            if node.nid == 0x21 {
-                Some(&store_cells)
-            } else {
-                None
-            },
+            override_cells.as_ref(),
             node.nid,
         )?;
         let mut entry = vec![0; 32];

@@ -253,3 +253,118 @@ pub fn attachment_store() -> Vec<u8> {
     put32(&mut b, 8192 + 4076, c);
     b
 }
+
+// A one-row, indexed cache with independent synthetic values.
+pub fn policy_table(cells: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+    let mut columns = vec![
+        (0x67f2, 3, 0x124u32.to_le_bytes().to_vec()),
+        (0x67f3, 3, 1u32.to_le_bytes().to_vec()),
+    ];
+    columns.extend_from_slice(cells);
+    let mut info = vec![0; 22 + columns.len() * 8];
+    info[0] = 0x7c;
+    info[1] = columns.len() as u8;
+    put32(&mut info, 10, 64);
+    put32(&mut info, 14, 128);
+    let mut row = vec![];
+    let mut values = vec![];
+    for (i, (id, kind, bytes)) in columns.iter().enumerate() {
+        put32(&mut info, 22 + i * 8, (*id as u32) << 16 | *kind as u32);
+        put16(&mut info, 26 + i * 8, row.len() as u16);
+        let size = if *kind == 0x40 { 8 } else { 4 };
+        info[28 + i * 8] = size;
+        info[29 + i * 8] = i as u8;
+        if *kind == 0x102 {
+            row.extend_from_slice(&((5 + values.len() as u32) * 32).to_le_bytes());
+            values.push(bytes.clone());
+        } else {
+            row.extend_from_slice(bytes);
+        }
+    }
+    for at in [2, 4, 6] {
+        put16(&mut info, at, row.len() as u16);
+    }
+    let bitmap = columns.len().div_ceil(8);
+    row.extend(std::iter::repeat_n(0xff, bitmap));
+    put16(&mut info, 8, row.len() as u16);
+    let mut index = vec![0; 8];
+    put32(&mut index, 0, 0x124);
+    let mut allocations = vec![info, vec![0xb5, 4, 4, 0, 96, 0, 0, 0], index, row];
+    allocations.extend(values);
+    let mut b = vec![0; 12];
+    b[2] = 0xec;
+    b[3] = 0x7c;
+    put32(&mut b, 4, 32);
+    let mut offsets = vec![];
+    for a in allocations {
+        offsets.push(b.len() as u16);
+        b.extend(a);
+    }
+    offsets.push(b.len() as u16);
+    let map = b.len();
+    b.extend_from_slice(&((offsets.len() - 1) as u16).to_le_bytes());
+    b.extend([0, 0]);
+    for n in offsets {
+        b.extend_from_slice(&n.to_le_bytes());
+    }
+    put16(&mut b, 0, map as u16);
+    b
+}
+
+pub fn embedded_store() -> Vec<u8> {
+    let mut nodes = skeleton_nodes(pc(&[(0x0ff9, 0x102, vec![1; 16])]));
+    let mut object = 0x704u32.to_le_bytes().to_vec();
+    object.extend(0u32.to_le_bytes());
+    nodes.push((
+        0x5000,
+        0,
+        pc(&[
+            (0x3701, 0x0d, object),
+            (0x3705, 3, 5u32.to_le_bytes().to_vec()),
+        ]),
+    ));
+    nodes.push((
+        0x5020,
+        0,
+        pc(&[
+            (0x0e08, 3, 4321u32.to_le_bytes().to_vec()),
+            (0x4000, 0x102, vec![0x5a; 64]),
+        ]),
+    ));
+    nodes.push((0x5040, 0, vec![0x7b; 16]));
+    let mut inner = vec![0; 32];
+    inner[0] = 2;
+    put16(&mut inner, 2, 1);
+    put64(&mut inner, 8, 0x7ff);
+    put64(&mut inner, 16, 48);
+    nodes.push((0x5060, 0, inner));
+    let mut outer = vec![0; 56];
+    outer[0] = 2;
+    put16(&mut outer, 2, 2);
+    put64(&mut outer, 8, 0x685);
+    put64(&mut outer, 16, 40);
+    put64(&mut outer, 32, 0x704);
+    put64(&mut outer, 40, 44);
+    put64(&mut outer, 48, 54);
+    nodes.push((0x5080, 0, outer));
+    let mut b = generated_store(&nodes);
+    put64(&mut b, 4096 + 6 * 32 + 16, 58);
+    put64(&mut b, 4096 + 8 * 32 + 16, 54);
+    for i in [10, 11] {
+        let bid = 12 + i as u64 * 4 + 2;
+        put64(&mut b, 4096 + i * 32 + 8, bid);
+        put64(&mut b, 8192 + i * 24, bid);
+        let at = 12288
+            + nodes[..i]
+                .iter()
+                .map(|n| (n.2.len() + 24).div_ceil(512) * 512)
+                .sum::<usize>();
+        let span = (nodes[i].2.len() + 24).div_ceil(512) * 512;
+        put64(&mut b, at + span - 16, bid);
+    }
+    let c = crc(&b[4096..4096 + 4072]);
+    put32(&mut b, 4096 + 4076, c);
+    let c = crc(&b[8192..8192 + 4072]);
+    put32(&mut b, 8192 + 4076, c);
+    b
+}
