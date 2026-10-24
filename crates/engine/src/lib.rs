@@ -1,5 +1,6 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
+pub mod platform;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{
