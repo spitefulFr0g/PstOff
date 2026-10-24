@@ -1,0 +1,3 @@
+[target.x86_64-pc-windows-msvc]
+# The probe must start in a clean Sandbox without a separately installed VC runtime.
+rustflags = ["-C", "target-feature=+crt-static"]
