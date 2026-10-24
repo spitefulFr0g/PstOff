@@ -67,25 +67,49 @@ attachments or embedded messages; the generated binary attachment test passes.
 
 ## Required unresolved checks
 
-The explicit generated embedded-message test remains ignored in regular checks,
-with its exact failure visible in the ignore reason. Run it with:
+The generated embedded case now runs in regular checks. It verifies conversion,
+source bytes unchanged, the attachment table row and cells, `3705` method 5,
+`3701` Object type and reference, embedded size/binary properties, and a nested
+subnode payload. NDB indexes, subnode trees, decryption and data streams are read
+by the unchanged pinned Microsoft reader. A small independent test-only decoder
+handles single-page leaf-BTH PCs; it does not call production format code.
+This is positive generated NDB/content coverage, not complete messaging coverage.
+The fixture now includes an attachment-present flag and indexed attachment table.
+Production writer serialization required no change for this case.
+
+The original high-level messaging reproduction remains ignored and fails on
+explicit execution:
 
 ```bash
-scripts/cargo-sandboxed test -p pstoff-engine --test writer embedded_message -- --ignored --nocapture
+scripts/cargo-sandboxed test -p pstoff-engine --test writer embedded_message_high_level -- --ignored --nocapture
 ```
 
-It currently fails `AttachmentMethodNotFound` at Microsoft attachment readback.
-The generated fixture and reader behavior need further diagnosis; neither an
-upstream defect nor positive embedded coverage is established by that failure.
-Do not treat the normal check suite as satisfying this required acceptance gap.
+The cause is established in pinned `outlook-pst-rs` cfb721d:
+`ltp/prop_type.rs` declares Object (`0x000D`) but `TryFrom<u16>` omits it.
+`ltp/tree.rs` stops leaf enumeration on any decoding error (`while let Ok`),
+so attachment enumeration stops at `3701` before reaching `3705`, yielding
+`AttachmentMethodNotFound`. The dependency is unchanged; this does not establish
+that its later embedded-message handling works.
 
-Windows-hosted build/smoke work is authorized **only in Windows Sandbox**. The
-previous guest heartbeat succeeded, but no Rust/MSVC build wrapper was verified.
-Read-only host prerequisite checks found no cargo.exe, rustc.exe or cl.exe on
-PATH, no standard user Rust toolchain directory, and no standard VS 2022 BuildTools
-MSVC directory (a Windows SDK directory exists). No Windows build or smoke check
-was run and no downloaded installer was executed. A prepared Windows toolchain
-and a verified guest build mapping/wrapper remain required.
+Generate persistent synthetic acceptance files with:
+
+```bash
+scripts/cargo-sandboxed test -p pstoff-engine --test writer generated_embedded_acceptance_artifact -- --ignored --nocapture
+```
+
+The target directory must have no prior `embedded.pst`; preserve old evidence
+before rerunning. This minimal generated store is **not SCANPST-clean**: the
+experiment reports 54 diagnostics with both scan input and original unchanged.
+Libpff also fails: identifier-reader errors on both files and two unexplained
+store additions. Its graph comparison does not traverse this generated message.
+Neither failure is waived or reclassified as PASS. The independent generated
+content check is narrower than Faithful acceptance.
+
+The newer authorized offline Windows Sandbox setup has read-only toolchain,
+SDK, fetched dependency and previous-build mappings. Writer attempt 3 uses that
+setup for a guest-only engine/CLI check; its exact result and clean-source
+provenance are retained under task notes `logs/writer3*`. No build runs on the
+Windows host. This supersedes the older unavailable-toolchain observation.
 
 The broader synthetic strict SCANPST/libpff matrix, independent complete table
 comparison, backend/frontend integration reviews and manual classic Outlook check

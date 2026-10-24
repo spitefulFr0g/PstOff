@@ -299,6 +299,18 @@ fn independent_properties(
     let pst = UnicodePstFile::open(path).unwrap();
     let node = pst.read_node(NodeId::from(nid)).unwrap();
     let bytes = pst.read_block(node.data()).unwrap();
+    independent_small_pc(&bytes)
+}
+
+// Test-only decoder for single-page, leaf-BTH generated PCs. NDB blocks and
+// nested subnode entries come from Microsoft, never the production reader.
+fn independent_small_pc(bytes: &[u8]) -> std::collections::BTreeMap<u16, Vec<u8>> {
+    independent_typed_small_pc(bytes)
+        .into_iter()
+        .map(|(id, (_, value))| (id, value))
+        .collect()
+}
+fn independent_typed_small_pc(bytes: &[u8]) -> std::collections::BTreeMap<u16, (u16, Vec<u8>)> {
     let word = |at| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) as usize;
     let item = |hid: u32| {
         assert_eq!(hid >> 16, 0);
@@ -318,7 +330,7 @@ fn independent_properties(
             } else {
                 item(u32::from_le_bytes(r[4..8].try_into().unwrap())).to_vec()
             };
-            (id, value)
+            (id, (kind, value))
         })
         .collect()
 }
@@ -435,8 +447,8 @@ fn invalid_cache_identity_cannot_authorize_property_promotion() {
 }
 
 #[test]
-#[ignore = "required acceptance gap: generated embedded fixture/readback fails AttachmentMethodNotFound; investigate before claiming coverage"]
-fn embedded_message_properties_roundtrip_through_independent_reader() {
+#[ignore = "pinned Microsoft messaging API omits PtypObject decoding; see docs/writer-verification.md"]
+fn embedded_message_high_level_reader_reproduction() {
     use outlook_pst::messaging::{
         attachment::{Attachment, AttachmentData, UnicodeAttachment},
         message::UnicodeMessage,
@@ -658,4 +670,116 @@ fn table_preserves_distinct_types_for_same_property_id() {
         }
     }
     assert_eq!(count, 2);
+}
+
+fn independent_subnodes(
+    pst: &UnicodePstFile,
+    bid: outlook_pst::ndb::block_id::UnicodeBlockId,
+) -> Vec<outlook_pst::ndb::block::UnicodeLeafSubNodeTreeEntry> {
+    use outlook_pst::ndb::{
+        block::SubNodeTree, block_id::BlockId, header::Header, page::UnicodeBlockBTree, root::Root,
+    };
+    let mut reader = pst.reader().lock().unwrap();
+    let bbt = UnicodeBlockBTree::read(&mut *reader, *pst.header().root().block_btree()).unwrap();
+    let mut cache = Default::default();
+    let block = bbt
+        .find_entry(&mut *reader, bid.search_key(), &mut cache)
+        .unwrap();
+    SubNodeTree::<UnicodePstFile>::read(&mut *reader, &block)
+        .unwrap()
+        .entries(&mut *reader, &bbt, &mut cache)
+        .unwrap()
+        .collect()
+}
+
+#[test]
+fn embedded_message_properties_roundtrip_through_independent_ndb_reader() {
+    let f = support::Fixture::invalid();
+    let source = generated::embedded_store();
+    std::fs::write(&f.source, &source).unwrap();
+    let mut options = ConvertOptions::new(f.root.clone(), "embedded-ndb".into());
+    options.split = Split::Off;
+    let Conversion::Complete(report) =
+        convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+    else {
+        panic!("cancelled")
+    };
+    verify_embedded_content(&report.files[0].path);
+    assert_eq!(std::fs::read(&f.source).unwrap(), source);
+}
+
+fn verify_embedded_content(path: &std::path::Path) {
+    use outlook_pst::messaging::{
+        message::{Message, UnicodeMessage},
+        store::{Store, UnicodeStore},
+    };
+    use std::rc::Rc;
+    let pst = UnicodePstFile::open(path).unwrap();
+    let store = UnicodeStore::read(Rc::new(UnicodePstFile::open(path).unwrap())).unwrap();
+    let entry = store
+        .properties()
+        .make_entry_id(NodeId::from(0x124u32))
+        .unwrap();
+    let message = UnicodeMessage::read(store, &entry, None).unwrap();
+    let table = message.attachment_table().unwrap();
+    let rows: Vec<_> = table.rows_matrix().collect();
+    assert_eq!(rows.len(), 1);
+    for (column, value) in table
+        .context()
+        .columns()
+        .iter()
+        .zip(rows[0].columns(table.context()).unwrap())
+    {
+        if let Some(value) = value {
+            let value = table.read_column(&value, column.prop_type()).unwrap();
+            if column.prop_id() == 0x3705 {
+                assert!(matches!(
+                    value,
+                    outlook_pst::ltp::prop_context::PropertyValue::Integer32(5)
+                ));
+            }
+        }
+    }
+    assert_eq!(u32::from(rows[0].id()), 0x685);
+    let node = pst.read_node(NodeId::from(0x124u32)).unwrap();
+    let subs = independent_subnodes(&pst, node.sub_node().unwrap());
+    let attachment = subs
+        .iter()
+        .find(|s| s.node() == NodeId::from(0x685u32))
+        .unwrap();
+    let bytes = pst.read_block(attachment.block()).unwrap();
+    let typed = independent_typed_small_pc(&bytes);
+    assert_eq!(typed[&0x3701].0, 0x000d);
+    let props = independent_small_pc(&bytes);
+    assert_eq!(props[&0x3705], 5u32.to_le_bytes());
+    let object = &props[&0x3701];
+    assert_eq!(object.len(), 8);
+    let embedded_id = NodeId::from(u32::from_le_bytes(object[..4].try_into().unwrap()));
+    let embedded = subs.iter().find(|s| s.node() == embedded_id).unwrap();
+    let props = independent_small_pc(&pst.read_block(embedded.block()).unwrap());
+    assert_eq!(props[&0x0e08], 4321u32.to_le_bytes());
+    assert_eq!(props[&0x4000], vec![0x5a; 64]);
+    let nested = independent_subnodes(&pst, embedded.sub_node().unwrap());
+    assert_eq!(nested.len(), 1);
+    assert_eq!(pst.read_block(nested[0].block()).unwrap(), vec![0x7b; 16]);
+}
+
+#[test]
+#[ignore = "writes persistent generated acceptance files under target/writer-fixtures"]
+fn generated_embedded_acceptance_artifact() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/writer-fixtures/embedded");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("source.ost");
+    let source = generated::embedded_store();
+    std::fs::write(&path, &source).unwrap();
+    let mut options = ConvertOptions::new(root, "embedded".into());
+    options.split = Split::Off;
+    let Conversion::Complete(report) =
+        convert(&path, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+    else {
+        panic!("cancelled")
+    };
+    verify_embedded_content(&report.files[0].path);
+    assert_eq!(std::fs::read(path).unwrap(), source);
 }
