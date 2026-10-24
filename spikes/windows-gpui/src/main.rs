@@ -1,5 +1,3 @@
-/src/spikes/windows-gpui/src/main.rs:
-
 //! Synthetic Windows feasibility probe. This does not inspect or convert mail.
 use gpui::{
     App, Context, Div, ExternalPaths, FocusHandle, PathPromptOptions, Role, Stateful, Window,
