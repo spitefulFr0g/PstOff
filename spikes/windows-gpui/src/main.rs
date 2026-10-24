@@ -151,12 +151,6 @@ fn button(
         .border_color(rgb(0x305f9e))
         .focus(|style| style.border_color(rgb(0xffffff)))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, cx)))
-        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-            if matches!(event.keystroke.key.as_str(), "enter" | "space" | " ") {
-                activate(this, cx);
-                cx.stop_propagation();
-            }
-        }))
         .child(label)
 }
 
@@ -185,7 +179,7 @@ impl Render for Probe {
                 .child(button("destination", "Choose destination", 1, cx, |this, cx| this.browse(true, cx)))
                 .child(button("start", "Start synthetic work", 2, cx, |this, cx| this.start(cx)))
                 .child(button("cancel", "Cancel work", 3, cx, |this, _| this.cancel())))
-            .child(div().id("progress").role(Role::Status).aria_label(format!("Synthetic progress {} percent", self.percent))
+            .child(div().id("progress").role(Role::Status).aria_label(format!("Synthetic progress {} percent. {}", self.percent, self.status))
                 .child(format!("{}% — {}", self.percent, self.status)))
     }
 }
