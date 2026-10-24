@@ -1,6 +1,6 @@
 # Windows GPUI feasibility gate
 
-Status: **conditional go; required acceptance remains unresolved**.
+Status: **conditional go; final-source verification is recorded in the task report**.
 
 Issue #6 research at `t3/recover-research-notes:docs/research/gpui-windows.md`
 was a source investigation, not build evidence. Attempt 3 added a separate
@@ -16,7 +16,9 @@ The build and runtime results below describe earlier source revisions. The
 #44 scope update removed custom accessibility and keyboard/focus support from
 the probe after those checks. No tests, builds or smoke checks were run for
 that update; prior build/runtime evidence is stale for the revised source.
-Historical attempt-4 evidence remains unchanged.
+Historical attempt-4 and attempt-6 evidence remains unchanged. The notice-only
+follow-up requires fresh checks on its own clean committed source; consult the
+attempt-7 report for results, commands, source SHA, artifacts and limits.
 
 Windows-hosted debug and release builds passed in an offline Windows Sandbox
 using Rust stable MSVC 1.99.1, MSVC 14.44.35207 and Windows SDK 10.0.26100.0.
@@ -145,9 +147,17 @@ preserved pstfree fork's existing notices also remain binding where used.
 
 Notice collection recovered files from crate archives and, where omitted,
 upstream roots at the packaged VCS SHA for 332 packages, including British-spelled
-`LICENCE` files. Exact-revision notice collection remains unresolved for
-`seahash 4.1.0` and `simd_helpers 0.1.0`, both declaring MIT. Do not call redistribution cleared
-until missing attribution and applicable notice obligations are resolved.
+`LICENCE` files. For
+`seahash 4.1.0` and `simd_helpers 0.1.0`, both declaring MIT, the maintainer
+authorized a reconstructed standard MIT notice (#45). Bundle
+`third-party/seahash-simd_helpers-MIT` with those 332 packages' collected
+notices. `THIRD-PARTY.md` records exact versions, archive checksums, VCS pins
+and attribution from each exact archive's `Cargo.toml.orig` authors field.
+The 2021 and 2019 years come from registry publication metadata, not verified
+copyright dates; the notice is reconstructed by PstOff, not supplied upstream.
+Neither exact archive nor its upstream revision tree contains a notice file.
+No dependency changed. Final-source metadata and hash verification must cover
+all 334 packages and all retained notice files.
 
 Required remaining checks include real Explorer multi-file drop; native
 selection/cancellation including Unicode and invalid paths; mouse operation
