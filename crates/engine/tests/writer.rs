@@ -342,7 +342,33 @@ fn validated_timestamp_is_added_to_item_and_contents_from_same_plan() {
         panic!("cancelled")
     };
     let own = independent_properties(&report.files[0].path, 0x124);
-    assert!(own.contains_key(&0x3008), "missing validated timestamp");
+    assert_eq!(own.get(&0x3008), Some(&123456789u64.to_le_bytes().to_vec()));
+    let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let entry = store
+        .properties()
+        .make_entry_id(NodeId::from(0x2062u32))
+        .unwrap();
+    let folder = store.open_folder(&entry).unwrap();
+    let table = folder.contents_table().unwrap();
+    let row = table.rows_matrix().next().unwrap();
+    let mut found = false;
+    for (column, value) in table
+        .context()
+        .columns()
+        .iter()
+        .zip(row.columns(table.context()).unwrap())
+    {
+        if column.prop_id() == 0x3008 {
+            assert!(matches!(
+                table
+                    .read_column(value.as_ref().unwrap(), column.prop_type())
+                    .unwrap(),
+                outlook_pst::ltp::prop_context::PropertyValue::Time(123456789)
+            ));
+            found = true;
+        }
+    }
+    assert!(found);
     assert!(report
         .differences
         .iter()
@@ -582,4 +608,54 @@ fn existing_timestamp_wins_and_matching_pair_member_is_preserved() {
         );
         assert_eq!(std::fs::read(&f.source).unwrap(), source);
     }
+}
+
+#[test]
+fn table_preserves_distinct_types_for_same_property_id() {
+    let f = support::Fixture::invalid();
+    let mut nodes = generated::skeleton_nodes(generated::pc(&[(0x0ff9, 0x102, vec![1; 16])]));
+    nodes.push((
+        0x206e,
+        0,
+        generated::policy_table(&[
+            (0x4000, 3, 17u32.to_le_bytes().to_vec()),
+            (0x4000, 0x40, 123456789u64.to_le_bytes().to_vec()),
+        ]),
+    ));
+    std::fs::write(&f.source, generated::generated_store(&nodes)).unwrap();
+    let mut options = ConvertOptions::new(f.root.clone(), "typed-cells".into());
+    options.split = Split::Off;
+    let Conversion::Complete(report) =
+        convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+    else {
+        panic!("cancelled")
+    };
+    let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let entry = store
+        .properties()
+        .make_entry_id(NodeId::from(0x2062u32))
+        .unwrap();
+    let folder = store.open_folder(&entry).unwrap();
+    let table = folder.contents_table().unwrap();
+    let row = table.rows_matrix().next().unwrap();
+    let mut count = 0;
+    for (column, value) in table
+        .context()
+        .columns()
+        .iter()
+        .zip(row.columns(table.context()).unwrap())
+    {
+        if column.prop_id() == 0x4000 {
+            let value = table
+                .read_column(value.as_ref().expect("lost typed cell"), column.prop_type())
+                .unwrap();
+            match value {
+                outlook_pst::ltp::prop_context::PropertyValue::Integer32(n) => assert_eq!(n, 17),
+                outlook_pst::ltp::prop_context::PropertyValue::Time(n) => assert_eq!(n, 123456789),
+                _ => panic!("wrong cell type"),
+            };
+            count += 1;
+        }
+    }
+    assert_eq!(count, 2);
 }

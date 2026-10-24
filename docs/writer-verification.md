@@ -30,7 +30,9 @@ in a successful Conversion report.
 
 Q16 uses exact typed Item properties. Q17 removes only the unmatched `66280014`
 cell, and required schema descriptors never introduce default cell values. GUID
-TC cells use HNID storage. Essential store policy and temporary-file ownership
+TC cells use HNID storage. Table cells retain full property tags, preserving
+multiple typed columns with the same property ID; policy fields with ambiguous
+column types are rejected. Essential store policy and temporary-file ownership
 remain as documented in the original checkpoint; source hashing retains its
 read-only source handle. The spike implementation is reference only, not copied.
 

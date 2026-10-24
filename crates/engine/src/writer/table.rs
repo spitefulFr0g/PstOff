@@ -26,7 +26,7 @@ pub(super) struct Table {
     columns: Vec<(u32, usize)>,
     pub(super) pair_cache: bool,
     pub(super) time_cache: bool,
-    pub(super) rows: Vec<(u32, u32, Properties)>,
+    pub(super) rows: Vec<(u32, u32, BTreeMap<u32, Cell>)>,
 }
 pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
     let blocks = source.node_blocks(bid)?;
@@ -95,7 +95,7 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             _ if variable(kind) => 4,
             _ => return Err("Unsupported cache cell type".into()),
         };
-        if !tags.insert(tag >> 16)
+        if !tags.insert(*tag)
             || !bits.insert(*bit)
             || *size != required
             || at + size > ceb
@@ -103,6 +103,11 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             || (*at..at + size).any(|n| !occupied.insert(n))
         {
             return Err(format!("Invalid table column layout tag={tag:08x} at={at} size={size} required={required} bit={bit} ceb={ceb} width={width}").into());
+        }
+    }
+    for id in [0x3008, 0x65e2, 0x65e3] {
+        if columns.iter().filter(|c| c.0 >> 16 == id).count() > 1 {
+            return Err("Ambiguous policy column types".into());
         }
     }
     for (tag, at) in [(0x67f20003, 0), (0x67f30003, 4)] {
@@ -166,7 +171,7 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             if !seen.insert(id) || index.get(&id) != Some(&(rows.len() as u32)) {
                 return Err("Table row/index identity mismatch".into());
             }
-            let mut cells = Properties::new();
+            let mut cells = BTreeMap::new();
             for (tag, at, size, bit) in &columns {
                 if at + size > ceb || bit / 8 >= width - ceb {
                     return Err("Invalid table cell".into());
@@ -184,9 +189,9 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
                 } else {
                     row[*at..at + size].to_vec()
                 };
-                cells.insert((tag >> 16) as u16, Cell { kind, bytes });
+                cells.insert(*tag, Cell { kind, bytes });
             }
-            if !cells.contains_key(&0x67f2) || !cells.contains_key(&0x67f3) {
+            if !cells.contains_key(&0x67f20003) || !cells.contains_key(&0x67f30003) {
                 return Err("Absent table row identity".into());
             }
             rows.push((id, u32at(row, 4)?, cells));
@@ -222,18 +227,18 @@ impl Table {
                 if matches!(id, 0x67f2 | 0x67f3) {
                     continue;
                 }
-                let previous = cells.get(&id);
+                let previous = cells.get(tag);
                 let counterpart = own.get(&id).filter(|c| c.kind == kind);
                 let reason = if let Some(value) = counterpart {
                     let changed =
                         previous.is_none_or(|c| c.kind != value.kind || c.bytes != value.bytes);
-                    cells.insert(id, value.clone());
+                    cells.insert(*tag, value.clone());
                     if !changed {
                         continue;
                     }
                     "Q16: contents cell rebuilt from the Item's own exact property tag."
                 } else if *tag == 0x66280014 && previous.is_some() {
-                    cells.remove(&id);
+                    cells.remove(tag);
                     "Q17: omit undocumented table-only cell without an exact Item property."
                 } else {
                     continue;
@@ -329,10 +334,7 @@ impl Table {
             p32(&mut row, 4, *unique);
             for (tag, size) in &columns {
                 let bit = bits[tag];
-                let Some(cell) = cells
-                    .get(&((tag >> 16) as u16))
-                    .filter(|c| c.kind == *tag as u16)
-                else {
+                let Some(cell) = cells.get(tag).filter(|c| c.kind == *tag as u16) else {
                     continue;
                 };
                 let at = offsets[tag];

@@ -28,7 +28,10 @@ pub(super) fn prepare(
                 node.nid,
                 table.pair_cache,
                 table.time_cache,
-                cells,
+                cells
+                    .into_iter()
+                    .map(|(tag, cell)| ((tag >> 16) as u16, cell))
+                    .collect(),
             ));
         }
     }
