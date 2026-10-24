@@ -183,8 +183,14 @@ pub(crate) fn bth_records(heap: &Heap) -> Result<(usize, Vec<Vec<u8>>), String> 
             continue;
         }
         let data = heap.item(hid)?;
+        if level > 32 {
+            return Err("Heap B-tree exceeds depth limit".into());
+        }
         // Leaves are key+value; everything above is key plus the id of the next level.
         let width = if level == 0 { key + ent } else { key + 4 };
+        if data.len() % width != 0 {
+            return Err("Partial heap B-tree record".into());
+        }
         for rec in data.chunks_exact(width) {
             if level == 0 {
                 out.push(rec.to_vec());
@@ -371,8 +377,102 @@ pub fn read_names(pst: &mut Pst, nodes: &[Node]) -> Names {
     Names(out)
 }
 
+/// Lossless identity of a named property. GUID bytes retain Windows wire ordering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedProperty {
+    pub guid: [u8; 16],
+    pub name: PropertyName,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PropertyName {
+    Id(u32),
+    String(String),
+}
+
+/// Checked name map for conversion policy; unlike display labels, invalid/missing
+/// streams and malformed identities are explicit errors rather than empty defaults.
+pub fn read_named_properties(
+    pst: &mut Pst,
+    nodes: &[Node],
+) -> Result<BTreeMap<u16, NamedProperty>, String> {
+    let Some(node) = nodes.iter().find(|n| n.nid == NID_NAME_TO_ID_MAP) else {
+        return Ok(BTreeMap::new());
+    };
+    let pc = read_node_pc(pst, node)?;
+    let stream = |id| match pc.props.get(&id) {
+        Some(Value::Bytes(bytes)) if pc.types.get(&id) == Some(&0x0102) => Ok(bytes.as_slice()),
+        _ => Err("Invalid named-property stream".to_string()),
+    };
+    let guids = stream(PID_NAMEID_GUIDS)?;
+    let entries = stream(PID_NAMEID_ENTRIES)?;
+    let strings = stream(PID_NAMEID_STRINGS)?;
+    if guids.len() % 16 != 0 || entries.len() % 8 != 0 {
+        return Err("Partial named-property record".into());
+    }
+    let mut names = BTreeMap::new();
+    for entry in entries.as_chunks::<8>().0 {
+        let value = u32le(entry, 0);
+        let flags = u16le(entry, 4);
+        let index = u16le(entry, 6);
+        let id = 0x8000u16
+            .checked_add(index)
+            .ok_or("Invalid named-property id")?;
+        let guid = match flags >> 1 {
+            1 => [
+                0x28, 0x03, 0x02, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46,
+            ],
+            2 => [
+                0x29, 0x03, 0x02, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46,
+            ],
+            n if n >= 3 => {
+                let at = (n as usize - 3) * 16;
+                guids
+                    .get(at..at + 16)
+                    .ok_or("Missing named-property GUID")?
+                    .try_into()
+                    .map_err(|_| "Invalid GUID")?
+            }
+            _ => return Err("Invalid named-property GUID index".into()),
+        };
+        let name = if flags & 1 == 0 {
+            PropertyName::Id(value)
+        } else {
+            let at = value as usize;
+            let length = strings
+                .get(at..at + 4)
+                .ok_or("Missing named-property string length")?;
+            let count = u32le(length, 0) as usize;
+            if count & 1 != 0 {
+                return Err("Odd named-property string length".into());
+            }
+            let end = at
+                .checked_add(4)
+                .and_then(|start| start.checked_add(count))
+                .ok_or("Named-property length overflow")?;
+            let bytes = strings
+                .get(at + 4..end)
+                .ok_or("Truncated named-property string")?;
+            let utf16: Vec<_> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16le(b, 0))
+                .collect();
+            PropertyName::String(
+                String::from_utf16(&utf16).map_err(|_| "Invalid named-property UTF-16")?,
+            )
+        };
+        if names.insert(id, NamedProperty { guid, name }).is_some() {
+            return Err("Duplicate named-property id".into());
+        }
+    }
+    Ok(names)
+}
+
 /// A property context: every property on a folder, message or attachment.
 pub struct Pc {
+    /// Original property types, including types whose decoded Value shares a variant.
+    pub types: BTreeMap<u16, u16>,
     pub props: BTreeMap<u16, Value>,
     /// How many values were too big for the heap and had to be fetched from the node's
     /// subnode tree. Worth reporting: it is the difference between a node that is
@@ -419,12 +519,16 @@ pub fn read_pc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Pc, String>
     // PtypString8 values wait until every property is read, because the one that says
     // which code page they are in can come after them.
     let mut narrow = Vec::new();
+    let mut types = BTreeMap::new();
     for r in records {
         if r.len() < 8 {
             continue;
         }
         let (id, ptype, raw) = (u16le(&r, 0), u16le(&r, 2), u32le(&r, 4));
 
+        if types.insert(id, ptype).is_some() {
+            return Err("Duplicate property id".into());
+        }
         if is_inline(ptype) {
             props.insert(
                 id,
@@ -473,6 +577,7 @@ pub fn read_pc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Pc, String>
         props.insert(id, Value::Str(crate::html::decode(&bytes, cp)));
     }
     Ok(Pc {
+        types,
         props,
         from_subnode,
     })
@@ -608,14 +713,16 @@ pub struct Column {
     pub prop: u16,
     pub ptype: u16,
     /// Where the cell sits in a row, and how wide it is.
-    ib: usize,
-    cb: usize,
+    pub ib: usize,
+    pub cb: usize,
     /// Which bit of the row's cell-existence bitmap says whether this cell is set.
-    bit: usize,
+    pub bit: usize,
 }
 
 /// A table context: the rows of a hierarchy table, contents table or recipient table.
 pub struct Tc {
+    /// Preserve source cell locations and types for cache-integrity policy.
+    pub columns: Vec<Column>,
     pub rows: Vec<Row>,
 }
 
@@ -678,7 +785,7 @@ pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String>
             "table declares {ncols} columns that do not fit its header"
         ));
     }
-    if width == 0 || ceb_start > width {
+    if width < 4 || ceb_start > width {
         return Err(format!(
             "table rows are {width} bytes with a bitmap at {ceb_start}"
         ));
@@ -722,8 +829,22 @@ pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String>
         for r in b.chunks_exact(width).take(b.len() / width) {
             let mut props = BTreeMap::new();
             for c in &columns {
-                if c.ib + c.cb > width || c.bit / 8 >= width - ceb_start {
-                    continue;
+                if c.ib + c.cb > ceb_start
+                    || c.bit / 8 >= width - ceb_start
+                    || (is_variable(c.ptype) && c.cb != 4)
+                {
+                    return Err("Invalid table cell layout".into());
+                }
+                let required = match c.ptype {
+                    0x0002 => Some(2),
+                    0x000b => Some(1),
+                    0x0003 | 0x0004 | 0x000a => Some(4),
+                    0x0005 | 0x0006 | 0x0007 | 0x0014 | 0x0040 => Some(8),
+                    0x0048 => Some(16),
+                    _ => None,
+                };
+                if required.is_some_and(|width| c.cb != width) {
+                    return Err("Invalid fixed table cell width".into());
                 }
                 let ceb = &r[ceb_start..width];
                 if ceb[c.bit / 8] & (0x80 >> (c.bit % 8)) == 0 {
@@ -735,13 +856,13 @@ pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String>
                     let bytes = if hnid == 0 {
                         Vec::new()
                     } else if hnid & 0x1F == 0 {
-                        heap.item(hnid).unwrap_or(&[]).to_vec()
+                        heap.item(hnid)?.to_vec()
                     } else {
                         if subs.is_none() {
-                            subs = Some(pst.subnodes(bid_sub).unwrap_or_default());
+                            subs = Some(pst.subnodes(bid_sub)?);
                         }
                         match subs.as_ref().unwrap().get(&hnid).copied() {
-                            Some(s) => pst.node_blocks(s.data).unwrap_or_default().concat(),
+                            Some(s) => pst.node_blocks(s.data)?.concat(),
                             None => {
                                 props.insert(c.prop, Value::MissingSubnode(hnid));
                                 continue;
@@ -760,7 +881,7 @@ pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String>
             });
         }
     }
-    Ok(Tc { rows })
+    Ok(Tc { columns, rows })
 }
 
 /// One addressee of a message.
