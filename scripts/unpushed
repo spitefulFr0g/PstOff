@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# List local branches holding commits that no remote has. Exit 0 when none, 1 otherwise.
+#
+#     scripts/unpushed          # one line per branch: <branch> <commit count>
+#     scripts/unpushed --hook   # Claude Code Stop hook: a systemMessage warning, always exit 0
+#
+# It compares against the remote-tracking refs from the last fetch. See docs/agents/safety.md.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+unpushed=()
+while read -r branch; do
+    count=$(git rev-list --count "refs/heads/$branch" --not --remotes)
+    if [ "$count" -gt 0 ]; then
+        unpushed+=("$branch $count")
+    fi
+done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+
+if [ "${1:-}" = "--hook" ]; then
+    if [ "${#unpushed[@]}" -gt 0 ]; then
+        list=$(printf '%s, ' "${unpushed[@]}")
+        printf '{"systemMessage": "Unpushed work on: %s. Push it (docs/agents/safety.md, Git)."}\n' "${list%, }"
+    fi
+    exit 0
+fi
+
+if [ "${#unpushed[@]}" -gt 0 ]; then
+    printf '%s\n' "${unpushed[@]}"
+    exit 1
+fi

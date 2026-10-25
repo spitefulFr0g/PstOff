@@ -14,6 +14,14 @@ Uses the five default triage labels: `needs-triage`, `needs-info`, `ready-for-ag
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+## Machine
+
+Windows host: develop only in this checkout. Before a build, a check, a WSL command or a Windows Sandbox run, read `docs/agents/environment.md`.
+
+## Computer use
+
+To drive a Windows app (Outlook, the PstOff GUI), read `docs/agents/computer-use.md`.
+
 ## Safety
 
 **Hard rules** for private mail data, third-party code, SCANPST and pushing are in `docs/agents/safety.md`. Read it before building, running SCANPST or opening any OST or PST, and pass it on to every delegated agent.
