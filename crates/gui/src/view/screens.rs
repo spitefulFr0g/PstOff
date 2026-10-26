@@ -582,11 +582,16 @@ impl WizardView {
                         }),
                     ))
                     .when(p.over_outlook_limit, |d| {
-                        d.child(div().mt(px(12.)).child(note(
-                            NoteKind::Warn,
-                            "This PST would be over Outlook’s size limit",
-                            plan::over_limit_text(p.estimated_bytes),
-                        )))
+                        d.child(
+                            div()
+                                .mt(px(12.))
+                                .debug_selector(|| "output-size-warning".into())
+                                .child(note(
+                                    NoteKind::Warn,
+                                    "This PST would be over Outlook’s size limit",
+                                    plan::over_limit_text(p.estimated_bytes),
+                                )),
+                        )
                     })
             }));
         let problems = w.output_problems();
@@ -837,11 +842,14 @@ impl WizardView {
                     .child(completeness_band(&report::completeness_statement(w))),
             )
             .when(!over.is_empty(), |d| {
-                d.child(note(
-                    NoteKind::Warn,
-                    "A PST would be over Outlook’s 50 GB limit",
-                    format!("{}: go back to Output and turn on Split.", over.join(", ")),
-                ))
+                d.child(
+                    note(
+                        NoteKind::Warn,
+                        "A PST would be over Outlook’s 50 GB limit",
+                        format!("{}: go back to Output and turn on Split.", over.join(", ")),
+                    )
+                    .debug_selector(|| "convert-size-warning".into()),
+                )
             })
             .when(left_out > 0, |d| {
                 d.child(note(

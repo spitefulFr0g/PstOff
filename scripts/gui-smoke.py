@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Launch the PstOff GUI in a clean Windows Sandbox and screenshot each screen.
+"""Launch the synthetic GUI smoke driver in a clean Windows Sandbox.
 
-The guest maps only the built .exe, generated synthetic OSTs and the guest
+The driver opens the production wizard with the real engine, holding a progress
+event until the screenshot is taken. The guest maps only the built .exe,
+generated synthetic OSTs and the guest
 script, read-only, plus one writable output folder. No checkout, crate cache or
 toolchain is mapped, and networking and the clipboard are off. The guest drives
 the window with its own mouse, so the host desktop is never touched.
 
 Build the inputs first, through the cargo wrapper:
 
-    python scripts/sandbox-cargo.py build --release --locked -p pstoff-gui --config "target.x86_64-pc-windows-msvc.rustflags=['-C','target-feature=+crt-static']"
+    python scripts/sandbox-cargo.py build --release --locked -p pstoff-gui --example gui-smoke --config "target.x86_64-pc-windows-msvc.rustflags=['-C','target-feature=+crt-static']"
     python scripts/sandbox-cargo.py test --locked -p pstoff-gui --test smoke_fixtures -- --ignored
 
 Then run `python scripts/gui-smoke.py [--out DIR]`.
@@ -19,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -70,6 +73,21 @@ def stage_input(input_dir: Path, exe: Path, fixtures: Path) -> None:
         shutil.copy2(fixture, input_dir / "fixtures" / fixture.name)
 
 
+def retain_output(output: Path, input_dir: Path, destination: Path) -> None:
+    """Keep nested conversion artifacts and their generated comparison inputs."""
+    shutil.copytree(output, destination, dirs_exist_ok=True)
+    shutil.copytree(input_dir / "fixtures", destination / "sources", dirs_exist_ok=True)
+    evidence = {}
+    for folder in ("sources", "conversions"):
+        for path in sorted((destination / folder).glob("*")):
+            if path.is_file():
+                evidence[path.relative_to(destination).as_posix()] = {
+                    "bytes": path.stat().st_size,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+    (destination / "artifacts.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+
+
 def run(exe: Path, fixtures: Path, destination: Path, timeout: int) -> int:
     temp = sandbox_cargo.temp_root()
     lock = temp / "PstOffSandboxCargo" / "sandbox.lock"
@@ -77,7 +95,10 @@ def run(exe: Path, fixtures: Path, destination: Path, timeout: int) -> int:
         if sandbox_cargo.sandbox_processes():
             print("Windows Sandbox is already running outside this script; leaving it untouched.", file=sys.stderr)
             return sandbox_cargo.EXIT_SANDBOX_RUNNING
+        if destination.exists() and any(destination.iterdir()):
+            raise RuntimeError(f"Refusing to overwrite retained smoke evidence: {destination}")
         run_dir = Path(tempfile.mkdtemp(prefix="PstOffGuiSmoke-run-", dir=temp))
+        retained = False
         try:
             input_dir = run_dir / "input"
             output = run_dir / "output"
@@ -90,27 +111,37 @@ def run(exe: Path, fixtures: Path, destination: Path, timeout: int) -> int:
                 return sandbox_cargo.EXIT_SANDBOX_RUNNING
             launcher = os.environ.get("PSTOFF_WINDOWS_SANDBOX", "WindowsSandbox.exe")
             process = subprocess.Popen([launcher, str(wsb)])
-            state = sandbox_cargo.wait_for_guest(process, output / "finished.txt", timeout)
-            if state == "timeout":
+            try:
+                state = sandbox_cargo.wait_for_guest(process, output / "finished.txt", timeout)
+            except BaseException:
                 sandbox_cargo.close_sandbox(process)
+                retain_output(output, input_dir, destination)
+                retained = True
+                raise
+            # Stop only the Sandbox this run launched, then retain evidence even
+            # on timeout or guest failure. The marker is written after all files.
+            if state != "closed":
+                sandbox_cargo.close_sandbox(process)
+            retain_output(output, input_dir, destination)
+            retained = True
+            if state == "timeout":
                 print("The smoke run timed out.", file=sys.stderr)
                 return sandbox_cargo.EXIT_CANNOT_RUN
             if state == "closed":
                 print("Windows Sandbox closed before the smoke run finished.", file=sys.stderr)
                 return sandbox_cargo.EXIT_CANNOT_RUN
-            # Let the guest finish writing before the Sandbox goes away.
-            time.sleep(2)
-            sandbox_cargo.close_sandbox(process)
-            destination.mkdir(parents=True, exist_ok=True)
-            for item in output.iterdir():
-                if item.is_file():
-                    shutil.copy2(item, destination / item.name)
             log = output / "smoke.log"
             if log.exists():
                 print(log.read_text(encoding="utf-8", errors="replace"), end="")
             return int((output / "finished.txt").read_text(encoding="ascii").strip() or 2)
         finally:
-            shutil.rmtree(run_dir, ignore_errors=True)
+            resolved = run_dir.resolve()
+            if resolved.parent != temp.resolve() or not resolved.name.startswith("PstOffGuiSmoke-run-"):
+                raise RuntimeError(f"Refusing to remove unexpected smoke directory: {resolved}")
+            if retained:
+                shutil.rmtree(resolved, ignore_errors=True)
+            else:
+                print(f"Smoke staging retained for recovery: {run_dir}", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
@@ -120,7 +151,7 @@ def main(argv: list[str]) -> int:
     root = sandbox_cargo.repo_root()
     built = persistent_output(root) / "target"
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--exe", type=Path, default=built / "release" / "pstoff-gui.exe")
+    parser.add_argument("--exe", type=Path, default=built / "release" / "examples" / "gui-smoke.exe")
     parser.add_argument("--fixtures", type=Path, default=built / "tmp" / "gui-smoke")
     parser.add_argument("--out", type=Path, default=root / ".scratch" / "gui-smoke" / time.strftime("%Y%m%d-%H%M%S"))
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)

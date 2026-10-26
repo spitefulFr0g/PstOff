@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run audit, formatting, lint and tests in one Windows Sandbox session."""
+"""Run audit, workspace Rust checks and Python harness tests in Windows Sandbox."""
 
 import subprocess
 import sys

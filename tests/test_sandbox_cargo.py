@@ -1,5 +1,7 @@
 import importlib.util
+import os
 import tempfile
+import time
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -13,6 +15,42 @@ SPEC.loader.exec_module(sandbox_cargo)
 
 
 class SandboxCargoTests(unittest.TestCase):
+    def test_checks_cover_every_workspace_crate(self):
+        commands = sandbox_cargo.CHECK_COMMANDS
+        self.assertIn(("fmt", "--all", "--", "--check"), commands)
+        self.assertIn(("test", "--locked", "--workspace"), commands)
+        clippy = next(command for command in commands if command[0] == "clippy")
+        self.assertIn("--workspace", clippy)
+        self.assertIn("--all-targets", clippy)
+
+    def test_python_tests_run_in_guest_and_propagate_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            script = Path(temp) / "guest.cmd"
+            sandbox_cargo.make_guest_script(script, (), is_check=True)
+            contents = script.read_text()
+            self.assertIn(r"C:\PstOffPython\python.exe -I -S -B -m unittest discover -s C:\PstOffSource\tests -v", contents)
+            self.assertIn(r"echo %STEP_EXIT% > C:\PstOffOutput\python-tests.exit", contents)
+            self.assertIn('if not %STEP_EXIT%==0 set "FINAL_EXIT=%STEP_EXIT%"', contents)
+            for i in range(len(sandbox_cargo.CHECK_COMMANDS)):
+                (Path(temp) / f"cargo-{i}.exit").write_text("0", encoding="ascii")
+            with mock.patch("builtins.print"):
+                self.assertEqual(sandbox_cargo.print_guest_output(Path(temp), is_check=True), 2)
+                (Path(temp) / "python-tests.exit").write_text("1", encoding="ascii")
+                self.assertEqual(sandbox_cargo.print_guest_output(Path(temp), is_check=True), 1)
+
+    def test_python_and_git_are_only_readonly_check_mappings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config_path = root / "run.wsb"
+            sandbox_cargo.make_config(config_path, *[root / name for name in (
+                "source", "input", "cache", "rust", "vc", "kits", "output", "python", "git"
+            )])
+            config = ET.parse(config_path).getroot()
+            mappings = {m.findtext("SandboxFolder"): m.findtext("ReadOnly") for m in config.findall("./MappedFolders/MappedFolder")}
+            self.assertEqual(mappings[r"C:\PstOffPython"], "true")
+            self.assertEqual(mappings[r"C:\PstOffGit"], "true")
+            self.assertEqual([path for path, readonly in mappings.items() if readonly != "true"], [r"C:\PstOffOutput"])
+
     def test_config_disables_network_and_maps_only_output_writable(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -118,6 +156,22 @@ class SandboxCargoTests(unittest.TestCase):
             self.assertEqual((destination / "tracked.txt").read_text(), "tracked")
             self.assertFalse((destination / "ignored-data").exists())
             self.assertFalse((destination / "target").exists())
+
+    def test_snapshot_refreshes_backdated_edits_before_restoring_cargo_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            root.mkdir()
+            source = root / "changed.rs"
+            source.write_text("updated test source")
+            # Model an edit made while an earlier guest was still compiling.
+            os.utime(source, (1, 1))
+            listed = mock.Mock(stdout=b"changed.rs\0")
+            started = time.time()
+            with mock.patch.object(sandbox_cargo.subprocess, "run", return_value=listed):
+                sandbox_cargo.copy_snapshot(root, Path(temp) / "snapshot")
+            staged = Path(temp) / "snapshot" / "changed.rs"
+            self.assertEqual(staged.read_text(), "updated test source")
+            self.assertGreaterEqual(staged.stat().st_mtime, started - 1)
 
     def test_run_directory_cleanup_is_confined_to_temp_root(self):
         with tempfile.TemporaryDirectory() as temp:
