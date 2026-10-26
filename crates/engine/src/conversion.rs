@@ -229,10 +229,13 @@ fn report_text(report: &ConversionReport) -> String {
         report.source_sha256
     );
     for file in &report.files {
-        let _ = writeln!(text, "File: {} ({} bytes, part {})",
+        let _ = writeln!(
+            text,
+            "File: {} ({} bytes, part {})",
             file.path.display(),
             file.bytes,
-            file.part);
+            file.part
+        );
     }
     for folder in &report.folders {
         let _ = writeln!(
