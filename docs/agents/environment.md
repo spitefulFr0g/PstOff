@@ -30,24 +30,44 @@ The rules are in `docs/agents/safety.md`. For builds and checks on this Windows 
 
 ## Linux portable Cargo CI
 
-GitHub Actions may run the portable `pstoff-engine` and `pstoff-cli` Cargo
-checks on Ubuntu, using the workspace's supported Rust version 1.89. This
-platform-neutral lane runs formatting, Clippy and tests; it does not build the
-Windows GUI or establish Windows GUI/release acceptance. It also does not
-establish Faithful acceptance, which requires the checks in
-`docs/agents/faithful-checks.md`. Local Windows builds and checks still use
-Windows Sandbox as described above.
+GitHub Actions may run portable Cargo checks for the engine, CLI and format
+crates on Ubuntu, using the workspace's supported Rust version 1.89. The Linux
+lane checks formatting, Clippy and platform-independent tests. Windows-only
+conversion tests run through the local Windows Sandbox route below. Linux CI
+does not build the Windows GUI or establish Windows release acceptance; it
+also does not establish Faithful acceptance, which requires the checks in
+`docs/agents/faithful-checks.md`.
+
+## Full local check coverage
+
+`scripts/check` uses `fmt --all`, `clippy --workspace --all-targets` and
+`test --workspace`, including the `pstoff-format` crate. It also tests the GUI
+smoke example and runs `unittest discover -s tests -v` **inside the guest**.
+For this route only, the installed Python runtime (`sys.base_prefix`, override
+`PSTOFF_PYTHON_ROOT`) and Git (`C:\Program Files\Git`, override
+`PSTOFF_GIT_ROOT`) are mapped read-only. Python uses `-I -S -B` to isolate it
+from user configuration and site packages and to avoid writing bytecode into
+the source mapping. No harness test launches a real nested Sandbox; process
+and ownership tests mock that boundary. Python results go to
+`output-v2/python-tests.log` and `.exit` alongside the Cargo logs; any missing
+step or nonzero exit fails the check.
+Staged source files receive fresh timestamps so restored Cargo targets cannot
+hide edits made while an earlier snapshot was still compiling.
 
 ## GUI smoke run
 
 The GUI is never launched on the host. `python scripts/gui-smoke.py` boots a second, clean Windows Sandbox that maps only the built `.exe`, generated OSTs and `scripts/gui-smoke-guest.ps1` read-only, plus one writable output folder: no checkout, crate cache or toolchain. Networking and the clipboard are off. The guest script launches the wizard on the fixtures, clicks through it with the guest's own mouse, screenshots each screen, closes the window and records its exit code. It shares the cargo wrapper's host lock and refuses to start while another Sandbox runs.
 
-1. Build a self-contained release `.exe` (static CRT, so a clean guest needs no VC runtime):
+1. Build the self-contained synthetic smoke driver (static CRT, so a clean guest needs no VC runtime). This example opens the same wizard with the real engine, holds a nonzero progress event with a current folder until the guest captures it, and then resumes the real conversion. The shipping executable has no smoke gate:
    ```
-   python scripts/sandbox-cargo.py build --release --locked -p pstoff-gui --config "target.x86_64-pc-windows-msvc.rustflags=['-C','target-feature=+crt-static']"
+   python scripts/sandbox-cargo.py build --release --locked -p pstoff-gui --example gui-smoke --config "target.x86_64-pc-windows-msvc.rustflags=['-C','target-feature=+crt-static']"
    ```
 2. Write the smoke fixtures into the wrapper's target folder:
    ```
    python scripts/sandbox-cargo.py test --locked -p pstoff-gui --test smoke_fixtures -- --ignored
    ```
-3. `python scripts/gui-smoke.py`. Screenshots and `smoke.log` land in `.scratch/gui-smoke/<time>/`, or `--out <dir>`.
+3. `python scripts/gui-smoke.py`. Screenshots and `smoke.log` land in `.scratch/gui-smoke/<time>/`, or an empty `--out <dir>`. The guest writes PSTs and JSON/text reports directly to the dedicated writable mapping's `conversions/` directory. The host retains that tree, copies the generated comparison OSTs into `sources/`, and writes byte counts and SHA-256 hashes to `artifacts.json`. Failures, early closes and timeouts retain available artifacts too; check `finished.txt` and the exit code before using them. If retention itself fails, staging is left in temp for recovery. Existing evidence is never overwritten.
+
+The smoke route is generated-data evidence only. It does not perform any
+Faithful check. Keep the retained source/PST pairs for the separately authorized
+SCANPST, independent libpff comparison and manual Outlook acceptance gates.

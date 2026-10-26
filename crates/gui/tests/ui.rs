@@ -265,6 +265,41 @@ fn output_choices_reach_the_convert_options(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn outlook_warning_renders_only_above_limit_without_split(cx: &mut TestAppContext) {
+    let t = Temp::new();
+    let (view, cx) = open(cx, real());
+    add(&view, cx, vec![t.write("generated.ost", &mailbox())]);
+    click(cx, "step-2");
+    choose_destination(cx, t.out());
+    assert!(!shown(cx, "output-size-warning"));
+    view.update(cx, |v, cx| {
+        // Change only the synthetic inspection's size estimate, never allocate
+        // a large file and never convert this deliberately inflated plan.
+        let source = &mut v.wizard.sources[0];
+        let total = source.totals().bytes;
+        let inspection = source.inspection.as_mut().unwrap();
+        inspection.folders[0].bytes += 50 * pstoff_gui::format::GIB - total;
+        cx.notify();
+    });
+    assert!(!shown(cx, "output-size-warning"), "exactly at the limit");
+    view.update(cx, |v, cx| {
+        v.wizard.sources[0].inspection.as_mut().unwrap().folders[0].bytes += 1;
+        cx.notify();
+    });
+    assert!(shown(cx, "output-size-warning"));
+    click(cx, "next");
+    assert!(shown(cx, "convert-size-warning"));
+    click(cx, "back");
+    click(cx, "split");
+    assert!(!shown(cx, "output-size-warning"));
+    click(cx, "next");
+    assert!(!shown(cx, "convert-size-warning"));
+    click(cx, "back");
+    click(cx, "split");
+    assert!(shown(cx, "output-size-warning"));
+}
+
+#[gpui::test]
 fn converting_keeps_drawing_and_cancel_asks_first(cx: &mut TestAppContext) {
     let t = Temp::new();
     let gate = Gate::default();

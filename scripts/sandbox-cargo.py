@@ -21,14 +21,15 @@ EXIT_CANNOT_RUN = 2
 DEFAULT_TIMEOUT_SECONDS = 60 * 60
 CHECK_COMMANDS = (
     ("metadata", "--locked", "--format-version", "1", "--filter-platform", "x86_64-pc-windows-msvc"),
-    ("fmt", "-p", "pstoff-engine", "-p", "pstoff-cli", "-p", "pstoff-gui", "--", "--check"),
-    ("clippy", "--locked", "-p", "pstoff-engine", "-p", "pstoff-cli", "-p", "pstoff-gui", "--all-targets", "--", "-D", "warnings"),
-    ("test", "--locked", "-p", "pstoff-engine", "-p", "pstoff-cli", "-p", "pstoff-gui"),
+    ("fmt", "--all", "--", "--check"),
+    ("clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "warnings"),
+    ("test", "--locked", "--workspace"),
+    ("test", "--locked", "-p", "pstoff-gui", "--example", "gui-smoke"),
 )
 GUEST_ENVIRONMENT = (
     r'set "PATH=C:\PstOffRust\rustup\toolchains\stable-x86_64-pc-windows-msvc\bin;'
     r'C:\PstOffHostVC\Tools\MSVC\14.44.35207\bin\Hostx64\x64;'
-    r'C:\PstOffWindowsKits\bin\10.0.26100.0\x64;%PATH%"',
+    r'C:\PstOffWindowsKits\bin\10.0.26100.0\x64;C:\PstOffGit\cmd;%PATH%"',
     r'set "INCLUDE=C:\PstOffHostVC\Tools\MSVC\14.44.35207\include;'
     r'C:\PstOffWindowsKits\Include\10.0.26100.0\ucrt;'
     r'C:\PstOffWindowsKits\Include\10.0.26100.0\shared;'
@@ -181,7 +182,11 @@ def copy_snapshot(source: Path, destination: Path) -> None:
             continue
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(origin, target)
+        # Each guest sees the same source path while restoring a target cache.
+        # An edit made while an earlier snapshot builds can predate its cached
+        # artifacts. Fresh copy timestamps force Cargo to check this snapshot
+        # rather than silently reusing that earlier workspace test binary.
+        shutil.copyfile(origin, target)
 
 
 def cleanup_run_dir(run_dir: Path, temp: Path) -> None:
@@ -248,6 +253,13 @@ def make_guest_script(
                 'if not %STEP_EXIT%==0 set "FINAL_EXIT=%STEP_EXIT%"',
             )
         )
+    if is_check:
+        lines.extend((
+            r'C:\PstOffPython\python.exe -I -S -B -m unittest discover -s C:\PstOffSource\tests -v > C:\PstOffOutput\python-tests.log 2>&1',
+            'set "STEP_EXIT=%ERRORLEVEL%"',
+            r'echo %STEP_EXIT% > C:\PstOffOutput\python-tests.exit',
+            'if not %STEP_EXIT%==0 set "FINAL_EXIT=%STEP_EXIT%"',
+        ))
     lines.extend(
         (
             r"if exist C:\PstOffBuild\target robocopy C:\PstOffBuild\target C:\PstOffOutput\target /E /R:0 /W:0 /NFL /NDL /NJH /NJS /NP > C:\PstOffOutput\save-target.log",
@@ -276,6 +288,8 @@ def make_config(
     vc: Path,
     kits: Path,
     output: Path,
+    python: Path | None = None,
+    git: Path | None = None,
 ) -> None:
     config = ET.Element("Configuration")
     ET.SubElement(config, "VGpu").text = "Enable"
@@ -289,6 +303,10 @@ def make_config(
     add_mapping(config, vc, r"C:\PstOffHostVC", True)
     add_mapping(config, kits, r"C:\PstOffWindowsKits", True)
     add_mapping(config, output, r"C:\PstOffOutput", False)
+    if python is not None:
+        add_mapping(config, python, r"C:\PstOffPython", True)
+    if git is not None:
+        add_mapping(config, git, r"C:\PstOffGit", True)
     logon = ET.SubElement(config, "LogonCommand")
     ET.SubElement(logon, "Command").text = r"cmd.exe /c C:\PstOffInput\guest.cmd"
     ET.SubElement(config, "MemoryInMB").text = "8192"
@@ -308,6 +326,13 @@ def fetch_dependencies(root: Path, cache: Path, rust: Path) -> None:
 
 def print_guest_output(output: Path, is_check: bool = False) -> int:
     exit_files = sorted(output.glob("cargo-*.exit"), key=lambda p: int(p.stem.split("-")[1]))
+    if is_check:
+        expected = [output / f"cargo-{i}.exit" for i in range(len(CHECK_COMMANDS))]
+        expected.append(output / "python-tests.exit")
+        if not all(path.is_file() for path in expected):
+            print("The guest did not report every prescribed check.", file=sys.stderr)
+            return EXIT_CANNOT_RUN
+        exit_files.append(output / "python-tests.exit")
     result = 0
     for exit_file in exit_files:
         log = output / (exit_file.stem + ".log")
@@ -348,7 +373,7 @@ def run_wrapper(
         source = run_dir / "source"
         output = persistent / "output-v2"
         output.mkdir(exist_ok=True)
-        for old in (*output.glob("cargo-*"), output / "finished.txt"):
+        for old in (*output.glob("cargo-*"), *output.glob("python-tests.*"), output / "finished.txt"):
             if old.is_file():
                 old.unlink()
         try:
@@ -360,7 +385,9 @@ def run_wrapper(
             vc = required_path("PSTOFF_VC_ROOT", r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC")
             kits = required_path("PSTOFF_WINDOWS_KITS", r"C:\Program Files (x86)\Windows Kits\10")
             wsb = run_dir / "run.wsb"
-            make_config(wsb, source, input_dir, cache, rust, vc, kits, output)
+            python = required_path("PSTOFF_PYTHON_ROOT", sys.base_prefix) if is_check else None
+            git = required_path("PSTOFF_GIT_ROOT", r"C:\Program Files\Git") if is_check else None
+            make_config(wsb, source, input_dir, cache, rust, vc, kits, output, python, git)
             active = sandbox_processes()
             if active:
                 print("Windows Sandbox is already running outside this wrapper; leaving it untouched.", file=sys.stderr)

@@ -4,6 +4,7 @@
 $ErrorActionPreference = 'Stop'
 $inputDir = 'C:\PstOffSmokeInput'
 $outputDir = 'C:\PstOffSmokeOutput'
+$conversionDir = "$outputDir\conversions"
 $work = 'C:\PstOffSmoke'
 $result = 1
 
@@ -80,12 +81,12 @@ function Next($window) {
 }
 
 try {
-    New-Item -ItemType Directory -Force -Path $work, "$work\fixtures", "$work\out" | Out-Null
+    New-Item -ItemType Directory -Force -Path $work, "$work\fixtures", $conversionDir | Out-Null
     Copy-Item "$inputDir\pstoff-gui.exe" $work
     Copy-Item "$inputDir\fixtures\*.ost" "$work\fixtures"
     $fixtures = @(Get-ChildItem "$work\fixtures\*.ost" | Sort-Object Name | ForEach-Object { '"' + $_.FullName + '"' })
     Log "fixtures: $($fixtures -join ', ')"
-    $arguments = @('--out', "`"$work\out`"") + $fixtures
+    $arguments = @('--out', "`"$conversionDir`"") + $fixtures
     $process = Start-Process -FilePath "$work\pstoff-gui.exe" -ArgumentList $arguments -PassThru
     for ($i = 0; $i -lt 120 -and $process.MainWindowHandle -eq [IntPtr]::Zero; $i++) {
         if ($process.HasExited) { throw "pstoff-gui.exe exited early with $($process.ExitCode)" }
@@ -117,19 +118,36 @@ try {
 
     # Start conversion uses the pinned footer, in the same position as Next.
     Next $window
+    for ($i = 0; $i -lt 100 -and -not (Test-Path "$outputDir\progress-held.txt"); $i++) {
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not (Test-Path "$outputDir\progress-held.txt")) { throw 'No held engine progress event.' }
+    if (@(Get-ChildItem "$conversionDir\*.txt").Count -ne 0) { throw 'Conversion finished before progress capture.' }
+    # Let the ordinary 50 ms UI poll render the held engine event.
+    Start-Sleep -Milliseconds 300
     Shot $window '5-converting'
+    Set-Content -Path "$outputDir\progress-release.txt" -Value 'release' -Encoding Ascii
+    Log 'captured held real-engine progress; released conversion'
     for ($i = 0; $i -lt 120; $i++) {
-        if (@(Get-ChildItem "$work\out\*.txt" -ErrorAction SilentlyContinue).Count -ge 2) { break }
+        if (@(Get-ChildItem "$conversionDir\*.txt" -ErrorAction SilentlyContinue).Count -ge 2) { break }
         Start-Sleep -Milliseconds 500
     }
-    if (@(Get-ChildItem "$work\out\*.txt" -ErrorAction SilentlyContinue).Count -lt 2) {
+    if (@(Get-ChildItem "$conversionDir\*.txt" -ErrorAction SilentlyContinue).Count -lt 2) {
         throw 'Both generated mailboxes did not produce reports.'
     }
     Start-Sleep -Seconds 2
     Shot $window '6-report'
     Scroll $window -1200
     Shot $window '7-report-details'
-    Get-ChildItem "$work\out" -Force | ForEach-Object { Log "output: $($_.Name) $($_.Length)" }
+    foreach ($base in @('1-mailbox', '2-archive')) {
+        foreach ($extension in @('pst', 'json', 'txt')) {
+            $artifact = Get-Item "$conversionDir\$base.$extension"
+            if ($artifact.Length -eq 0) { throw "Empty conversion artifact: $base.$extension" }
+            Log "output: $($artifact.Name) $($artifact.Length)"
+        }
+        $report = Get-Content -Raw -Encoding UTF8 "$conversionDir\$base.json" | ConvertFrom-Json
+        if ($null -eq $report) { throw "Invalid JSON report: $base.json" }
+    }
 
     $process.CloseMainWindow() | Out-Null
     if (-not $process.WaitForExit(15000)) {
@@ -141,6 +159,8 @@ try {
 } catch {
     Log "failed: $_"
 } finally {
-    Set-Content -Path "$outputDir\finished.txt" -Value $result -Encoding Ascii
+    # Publish the completion marker only after its contents have been closed.
+    Set-Content -Path "$outputDir\finished.tmp" -Value $result -Encoding Ascii
+    Move-Item -LiteralPath "$outputDir\finished.tmp" -Destination "$outputDir\finished.txt"
     shutdown.exe /s /t 5
 }
