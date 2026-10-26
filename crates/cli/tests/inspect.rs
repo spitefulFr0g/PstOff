@@ -99,6 +99,7 @@ fn inspect_rejects_missing_path_argument() {
     assert!(String::from_utf8(output.stderr).unwrap().contains("Usage:"));
 }
 
+#[cfg(windows)]
 #[test]
 fn convert_unsupported_input_exits_three_without_output() {
     let root = std::env::temp_dir().join(format!("pstoff-cli-unsupported-{}", std::process::id()));
@@ -124,7 +125,7 @@ fn convert_unsupported_input_exits_three_without_output() {
 }
 
 #[test]
-fn unsupported_header_variants_are_reported_by_inspect_and_rejected_by_convert() {
+fn unsupported_header_variants_are_reported_by_inspect() {
     let cases = [
         ("ANSI", 14, 0, "Ansi"),
         ("v21 Unicode", 21, 0, "OlderUnicode(21)"),
@@ -162,14 +163,18 @@ fn unsupported_header_variants_are_reported_by_inspect_and_rejected_by_convert()
         assert!(stdout.contains("Support: unsupported"), "{name}: {stdout}");
         assert!(stdout.contains(reason), "{name}: {stdout}");
 
-        let converted = Command::new(env!("CARGO_BIN_EXE_pstoff"))
-            .arg("convert")
-            .arg(&source)
-            .arg("--out")
-            .arg(&output_dir)
-            .output()
-            .unwrap();
-        assert_eq!(converted.status.code(), Some(3), "{name}");
+        // Conversion reaches header validation only on Windows.
+        #[cfg(windows)]
+        {
+            let converted = Command::new(env!("CARGO_BIN_EXE_pstoff"))
+                .arg("convert")
+                .arg(&source)
+                .arg("--out")
+                .arg(&output_dir)
+                .output()
+                .unwrap();
+            assert_eq!(converted.status.code(), Some(3), "{name}");
+        }
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0, "{name}");
         assert_eq!(
             std::fs::read(&source).unwrap(),

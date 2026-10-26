@@ -28,5 +28,7 @@ jobs:
       - name: Run Clippy for portable crates
         run: cargo clippy --locked --all-targets -p pstoff-engine -p pstoff-cli -- -D warnings
 
-      - name: Test portable crates
+      # CLI conversion tests require Windows and are gated with cfg(windows).
+      # Keep engine/format tests and portable CLI inspect/argument tests on Ubuntu.
+      - name: Test engine, format, and portable CLI behavior
         run: cargo test --locked -p pstoff-engine -p pstoff-cli -p pstoff-format

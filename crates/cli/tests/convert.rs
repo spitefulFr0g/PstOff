@@ -69,6 +69,7 @@ impl Fixture {
         command
     }
 
+    #[cfg(windows)]
     fn report(&self, base: &str) -> pstoff_engine::ConversionReport {
         serde_json::from_slice(&std::fs::read(self.out.join(format!("{base}.json"))).unwrap())
             .unwrap()
@@ -90,6 +91,8 @@ fn status(output: &Output, code: i32) {
     );
 }
 
+// CLI conversion installs a Windows console handler; inspect and parsing are portable.
+#[cfg(windows)]
 #[test]
 fn convert_out_writes_pst_and_reports_with_stderr_progress() {
     let f = Fixture::new(vec![Item::new("IPM.Note", 42)]);
@@ -107,9 +110,7 @@ fn convert_out_writes_pst_and_reports_with_stderr_progress() {
     assert!(f.report("synthetic").skipped.is_empty());
 }
 
-#[test]
-fn explicit_options_reach_engine_and_inspect_exposes_exclusion_ids() {
-    let f = Fixture::new(vec![Item::new("IPM.Note", 42)]);
+fn inspect_exclusion_id(f: &Fixture) -> String {
     let inspected = Command::new(env!("CARGO_BIN_EXE_pstoff"))
         .arg("inspect")
         .arg(&f.source)
@@ -122,13 +123,30 @@ fn explicit_options_reach_engine_and_inspect_exposes_exclusion_ids() {
         .find(|line| line.contains("IPM_SUBTREE"))
         .unwrap();
     let id = line.split('[').nth(1).unwrap().split(']').next().unwrap();
+    assert!(id.starts_with("0x"));
+    u32::from_str_radix(&id[2..], 16).unwrap();
+    id.to_owned()
+}
+
+#[test]
+fn inspect_exposes_exclusion_ids_without_outputs() {
+    let f = Fixture::new(vec![Item::new("IPM.Note", 42)]);
+    inspect_exclusion_id(&f);
+    assert!(!f.out.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn explicit_options_reach_engine() {
+    let f = Fixture::new(vec![Item::new("IPM.Note", 42)]);
+    let id = inspect_exclusion_id(&f);
     let result = f
         .command()
         .args([
             "--base-name",
             "chosen",
             "--exclude-folder",
-            id,
+            &id,
             "--exclude-folder",
             &u32::from_str_radix(&id[2..], 16).unwrap().to_string(),
             "--split-limit",
@@ -151,6 +169,7 @@ fn explicit_options_reach_engine_and_inspect_exposes_exclusion_ids() {
     assert_eq!(std::fs::read_dir(&f.out).unwrap().count(), 3);
 }
 
+#[cfg(windows)]
 #[test]
 fn skipped_items_capacity_and_other_failures_have_distinct_codes() {
     let mut damaged = Item::new("IPM.Note", 42);
