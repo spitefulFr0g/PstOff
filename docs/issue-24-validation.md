@@ -45,6 +45,11 @@ syntax before their implementations; the publication-race test also caught
 `std::fs::rename` replacing an existing Windows destination. Exclusive
 `MoveFileExW` publication made that test green.
 
+The PR #49 standards follow-up makes the host metadata pipe explicitly UTF-8
+and reads audit input as JSON bytes. The wrapper also emits guest logs as UTF-8.
+The documented bare `python scripts/check` therefore no longer needs the
+`PYTHONUTF8` workaround used in these historical runs.
+
 ## Open validation
 
 No public OST fixture is tracked or present in `.scratch/spec-notes-20`.
@@ -79,3 +84,26 @@ smoke test. The staged diff passed `git diff --cached --check`.
 
 The public-fixture roundtrip and Faithful checks described above remain open.
 No private mail data or Outlook/PST candidate files were accessed.
+
+## PR #49 standards follow-up
+
+Based on PR head `92f2b870c187f1933da1e621d2f758082bbd4eaa`, the focused
+follow-up removes the Linux CI workflow and Linux workspace/build claims,
+fixes the host UTF-8 metadata pipe, and routes synthetic validation through
+the `libpff-check.py synthetic-check` entry point. CLI usage and error-exit
+mapping are shared helpers; engine behavior is unchanged.
+
+On 2026-10-26, bare `python scripts/check` passed with host Python UTF-8 mode
+off and the default `cp1252` locale: 39 packages audited, formatting and Clippy
+clean, 34 tests passed, none failed, and the opt-in export test ignored.
+A separate audit using UTF-8 JSON with non-ASCII metadata also passed with
+`PYTHONUTF8=0` and `PYTHONIOENCODING=cp1252`. Python syntax checks and
+`git diff --check` passed.
+
+After the other Sandbox session closed, the opt-in `export_for_libpff` test
+passed through `sandbox-cargo.py`. The documented WSL
+`libpff-check.py synthetic-check` command passed under bwrap with libpff
+20180714: two healthy samples and two expected independent read failures.
+Only the four newly generated OSTs were read. Their hashes match the existing
+[#23 evidence](evidence/issue-23-synthetic.json). No private or unknown mail
+files were accessed; the Faithful/public-fixture gates remain open.

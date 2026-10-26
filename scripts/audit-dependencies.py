@@ -12,13 +12,14 @@ APPROVED = {
     # Reviewed from locked ryu 1.0.20 and version_check 0.9.5 license files.
     "Apache-2.0 OR BSL-1.0", "MIT/Apache-2.0",
 }
-metadata = json.load(sys.stdin)
+# Cargo emits UTF-8 JSON regardless of the Windows host's active code page.
+metadata = json.load(sys.stdin.buffer)
 errors = []
 for package in metadata["packages"]:
     if package.get("license") not in APPROVED:
         errors.append(f"Unreviewed license: {package['name']} {package.get('license')}")
     if package["name"] == "gpui":
-        errors.append("GPUI must remain outside Linux workspace resolution")
+        errors.append("GPUI must remain outside workspace resolution until its Windows audit")
     if package["name"] == "outlook-pst" and package.get("source") != (
         "git+https://github.com/microsoft/outlook-pst-rs?"
         "rev=cfb721daee538acc50d2bad6faac5ce724f6037d#cfb721daee538acc50d2bad6faac5ce724f6037d"

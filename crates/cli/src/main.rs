@@ -8,22 +8,14 @@ fn main() -> ExitCode {
     let mut args = std::env::args_os();
     let program = args.next().unwrap_or_default();
     let Some(command) = args.next() else {
-        eprintln!(
-            "Usage: {} inspect <ost> | convert <ost> --out <dir>",
-            Path::new(&program).display()
-        );
-        return ExitCode::from(2);
+        return usage(&program);
     };
     if command != "inspect" && command != "convert" {
         eprintln!("Unknown command: {}", Path::new(&command).display());
         return ExitCode::from(2);
     }
     let Some(path) = args.next() else {
-        eprintln!(
-            "Usage: {} inspect <ost> | convert <ost> --out <dir>",
-            Path::new(&program).display()
-        );
-        return ExitCode::from(2);
+        return usage(&program);
     };
     let destination = if command == "convert" {
         match args.next() {
@@ -37,11 +29,7 @@ fn main() -> ExitCode {
         || (command == "inspect" && destination.is_some())
         || (command == "convert" && destination.is_none())
     {
-        eprintln!(
-            "Usage: {} inspect <ost> | convert <ost> --out <dir>",
-            Path::new(&program).display()
-        );
-        return ExitCode::from(2);
+        return usage(&program);
     }
 
     if command == "convert" {
@@ -72,11 +60,7 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 eprintln!("Conversion failed: {error}");
-                if matches!(error.kind, ErrorKind::Unsupported(_)) {
-                    ExitCode::from(3)
-                } else {
-                    ExitCode::FAILURE
-                }
+                error_exit(&error.kind)
             }
         };
     }
@@ -98,12 +82,24 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("Inspection failed: {error}");
-            if matches!(error.kind, ErrorKind::Unsupported(_)) {
-                ExitCode::from(3)
-            } else {
-                ExitCode::FAILURE
-            }
+            error_exit(&error.kind)
         }
+    }
+}
+
+fn usage(program: &std::ffi::OsStr) -> ExitCode {
+    eprintln!(
+        "Usage: {} inspect <ost> | convert <ost> --out <dir>",
+        Path::new(program).display()
+    );
+    ExitCode::from(2)
+}
+
+fn error_exit(kind: &ErrorKind) -> ExitCode {
+    if matches!(kind, ErrorKind::Unsupported(_)) {
+        ExitCode::from(3)
+    } else {
+        ExitCode::FAILURE
     }
 }
 

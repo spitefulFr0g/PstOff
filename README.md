@@ -41,7 +41,7 @@ python scripts/sandbox-cargo.py run --locked -p pstoff-cli
 
 All builds follow [safety](docs/agents/safety.md).
 The GUI has no GPUI dependency until its Windows feasibility task selects and
-audits a pin; Linux resolution and compilation do not include GPUI. The
+audits a pin; GPUI remains outside workspace resolution. The
 skeleton exits with failure and clearly states its status.
 
 ## Architecture and tests
@@ -80,8 +80,8 @@ No public mail fixture is downloaded by the full-check command.
 
 Positive readback, strict SCANPST, libpff comparison, Windows portable builds,
 and human Outlook and GUI checks remain required later acceptance gates.
-See [Faithful checks](docs/agents/faithful-checks.md). Linux foundation checks
-cannot establish Faithful conversion or Windows deployment.
+See [Faithful checks](docs/agents/faithful-checks.md). WSL is used only for the
+isolated libpff reader; all PstOff builds and checks use Windows Sandbox.
 
 ### Read-only OST inspection
 
@@ -93,7 +93,7 @@ invalid supported-format headers/indexes return a damaged-source error.
 Unreadable folder/Item contexts remain visible as folder markers. Inspection
 uses read-only handles; on Windows it denies concurrent writers/deletion and
 classifies sharing violations as In use. The Windows-specific sharing test
-requires an authorized Windows build and has not run in Linux.
+runs through the Windows Sandbox check route.
 
 Engine integration uses `reader::read_source` to retain the classified source
 handle, then the fork's PC/TC/subnode readers. PC types and TC column types,
