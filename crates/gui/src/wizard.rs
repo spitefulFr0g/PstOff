@@ -14,6 +14,13 @@ use std::sync::Arc;
 /// The engine's public seam. The wizard never reaches past it.
 pub trait Engine: Send + Sync + 'static {
     fn inspect(&self, path: &Path) -> Result<Inspection, EngineError>;
+    fn plan(
+        &self,
+        path: &Path,
+        options: &ConvertOptions,
+    ) -> Result<pstoff_engine::OutputPlan, EngineError> {
+        pstoff_engine::plan(path, options)
+    }
     fn convert(
         &self,
         path: &Path,
@@ -174,8 +181,21 @@ pub struct InspectRequest {
     pub path: PathBuf,
 }
 
+#[derive(Clone)]
+pub struct PlanRequest {
+    pub id: SourceId,
+    pub path: PathBuf,
+    pub options: ConvertOptions,
+}
+
+type MeasuredPlan = (
+    ConvertOptions,
+    Option<Result<pstoff_engine::OutputPlan, EngineError>>,
+);
+
 pub struct Wizard {
     engine: Arc<dyn Engine>,
+    plans: std::collections::HashMap<SourceId, MeasuredPlan>,
     pub step: Step,
     pub sources: Vec<Source>,
     next_id: u64,
@@ -191,6 +211,7 @@ impl Wizard {
     pub fn new(engine: Arc<dyn Engine>) -> Self {
         Self {
             engine,
+            plans: Default::default(),
             step: Step::Add,
             sources: Vec::new(),
             next_id: 0,
@@ -260,12 +281,16 @@ impl Wizard {
     }
 
     pub fn apply_inspection(&mut self, id: SourceId, result: Result<Inspection, EngineError>) {
+        if !self
+            .source(id)
+            .is_some_and(|source| source.status == Status::Checking)
+        {
+            return;
+        }
+        self.plans.remove(&id);
         let Some(source) = self.source_mut(id) else {
             return;
         };
-        if source.status != Status::Checking {
-            return;
-        }
         match result {
             Ok(inspection) => {
                 source.status = match &inspection.support {
@@ -308,6 +333,7 @@ impl Wizard {
             return;
         }
         self.sources.retain(|s| s.id != id);
+        self.plans.remove(&id);
         if self.pill == Some(id) {
             self.pill = None;
         }
@@ -429,9 +455,51 @@ impl Wizard {
         Some(plan::plan(
             &self.output,
             &source.base_name,
-            source.totals().bytes,
+            self.plans
+                .get(&id)
+                .filter(|(options, _)| Some(options) == self.convert_options(id).as_ref())
+                .and_then(|(_, result)| result.as_ref()),
             &taken,
         ))
+    }
+
+    /// View workers measure layouts off the UI thread. Only one request per
+    /// source is in flight; changed options schedule a fresh pass when it ends.
+    pub fn plan_requests(&mut self) -> Vec<PlanRequest> {
+        if self.run.is_some() || self.output.destination.is_none() {
+            return vec![];
+        }
+        let mut requests = vec![];
+        let ids: Vec<_> = self.ready().map(|s| s.id).collect();
+        for id in ids {
+            let options = self.convert_options(id).unwrap();
+            let needed = match self.plans.get(&id) {
+                Some((_, None)) => false,
+                Some((previous, Some(_))) => previous != &options,
+                None => true,
+            };
+            if needed {
+                requests.push(PlanRequest {
+                    id,
+                    path: self.source(id).unwrap().path.clone(),
+                    options: options.clone(),
+                });
+                self.plans.insert(id, (options, None));
+            }
+        }
+        requests
+    }
+
+    pub fn apply_plan(
+        &mut self,
+        request: &PlanRequest,
+        result: Result<pstoff_engine::OutputPlan, EngineError>,
+    ) {
+        if let Some((options, measured)) = self.plans.get_mut(&request.id) {
+            if options == &request.options {
+                *measured = Some(result);
+            }
+        }
     }
 
     /// Everything that stops the Output step from moving on.

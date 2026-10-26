@@ -21,6 +21,7 @@ support status, folder IDs, counts and sizes:
 pstoff inspect source.ost
 pstoff convert source.ost --out destination --base-name archive --exclude-folder 0x182 --split-limit 21474836480
 pstoff convert source.ost --out destination --split-limit off
+pstoff convert source.ost --out destination --dry-run
 ```
 
 `--base-name` defaults to the source stem. Repeat `--exclude-folder` for each
@@ -31,6 +32,20 @@ names are `<base-name>.json` and `<base-name>.txt`, independent of part names.
 Progress (percentage, Item counts, part and current folder ID) goes to stderr;
 results go to stdout. Ctrl+C cooperatively cancels, removes unfinished staging
 and keeps finished parts. Conversion is always Copy mode.
+
+`--dry-run` prints a JSON engine plan without creating the destination, PSTs,
+reports or temporary files. The plan includes output paths, whole-Item part
+counts, finalized layout sizes, an absolute per-file size tolerance (currently
+zero bytes), and a warning if any file exceeds Outlook's default 50 GiB limit.
+It reads and decodes the selected source content, so planning can take time.
+Conversion recomputes the same plan and verifies each finalized size before
+publication. Source changes invalidate an earlier preview. Destination capacity,
+collisions and I/O errors can still prevent a planned conversion.
+
+Reports use schema version 3, retain all earlier report fields, and add selected
+excluded folder paths and paths alongside local folder/Item references. Older
+reports deserialize with empty path/selection fields. See [the planning and
+report contract](docs/shared-plan-report.md).
 
 Stable exit codes for both commands:
 
@@ -76,19 +91,19 @@ All builds follow [safety](docs/agents/safety.md).
 
 `pstoff-gui` is a GPUI wizard pinned to the `gpui-pre` 0.3.9 snapshot audited
 by the Windows feasibility probe: Add OST files → Choose folders → Output →
-Convert → Report. It calls only the engine's public `inspect` and `convert`,
+Convert → Report. It calls the engine's public `inspect`, `plan` and `convert`,
 runs them off the UI thread, and shows the engine's statuses, errors and
 Conversion reports. Folder exclusions and Split use the engine's public options.
-The file preview estimates names and sizes from inspected folder sizes; final
-part counts and sizes depend on whole Items and PST overhead, so the saved
-Conversion report is authoritative. OST paths on the command line are added on start, as when files
+The file preview uses engine layout measurements, including whole Items and
+PST overhead. It waits for the current output options to finish planning on a
+worker before enabling conversion. OST paths on the command line are added on start, as when files
 are dropped on the `.exe`; `--out <folder>` picks the destination. The GUI is
 launched only inside Windows Sandbox: see the smoke run in
 [`docs/agents/environment.md`](docs/agents/environment.md).
 
 ## Architecture and tests
 
-`pstoff-engine` owns the platform-neutral `inspect`/`convert` seam and typed
+`pstoff-engine` owns the platform-neutral `inspect`/`plan`/`convert` seam and typed
 outcomes, shared by both frontends. Format code stays behind that seam.
 `third-party/pstfree` is the MIT upstream base imported at
 `b6e2ff31592f74458f0481d4671251c92044d8f0`, with only its library sources and a

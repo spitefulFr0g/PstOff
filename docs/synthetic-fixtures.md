@@ -21,8 +21,8 @@ HN pages using v36's 14-bit allocation index and block index at bit 19.
 `unreadable = true` on an Item or folder destroys only its heap signature before
 checksums are sealed. Indexes, tables and unrelated nodes remain readable.
 
-The builder deliberately bounds fixtures: one NBT leaf (126 nodes), one BBT leaf
-(169 blocks), one XBLOCK per stream (999 data blocks), at most 3500 bytes per
+The builder deliberately bounds fixtures: one NBT leaf (126 nodes), a BBT of up to two levels
+(169 blocks per leaf, up to 169 leaves), one XBLOCK per stream (999 data blocks), at most 3500 bytes per
 heap allocation. Larger property values become subnode streams. A description
 that exceeds a structural bound panics rather than silently truncating data.
 No allocation maps or free-space history are generated. These are reader-test

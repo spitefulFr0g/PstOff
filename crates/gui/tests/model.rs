@@ -26,10 +26,19 @@ fn add(w: &mut Wizard, paths: Vec<PathBuf>) -> Vec<SourceId> {
         .collect()
 }
 
+fn measure(w: &mut Wizard) {
+    let engine = w.engine();
+    for request in w.plan_requests() {
+        let result = engine.plan(&request.path, &request.options);
+        w.apply_plan(&request, result);
+    }
+}
+
 fn to_convert(w: &mut Wizard, destination: PathBuf) {
     w.next();
     w.next();
     w.set_destination(destination);
+    measure(w);
     w.next();
     assert_eq!(w.step, Step::Convert, "{:?}", w.output_problems());
 }
@@ -255,43 +264,26 @@ fn split_off_sends_no_limit_and_default_choice_is_the_engine_default() {
 }
 
 #[test]
-fn preview_names_parts_and_warns_past_outlooks_limit() {
+fn preview_uses_engine_sizes_and_warning_without_repacking_items() {
     let t = Temp::new();
-    let mut settings = OutputSettings {
+    let settings = OutputSettings {
         destination: Some(t.root.clone()),
         ..Default::default()
     };
-    let big = 120 * GIB;
-    let one = plan::plan(&settings, "mailbox", big, &[]);
-    assert_eq!(one.files.len(), 1);
-    assert_eq!(one.files[0].name, "mailbox.pst");
-    assert!(one.over_outlook_limit);
-    assert!(plan::over_limit_text(one.estimated_bytes).contains("50 GB"));
-
-    settings.split = true;
-    let parts = plan::plan(&settings, "mailbox", big, &[]);
-    assert!(!parts.over_outlook_limit);
-    let names: Vec<_> = parts.files.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(
-        names,
-        [
-            "mailbox-part001.pst",
-            "mailbox-part002.pst",
-            "mailbox-part003.pst",
-            "mailbox-part004.pst",
-            "mailbox-part005.pst",
-            "mailbox-part006.pst"
-        ]
-    );
-    assert_eq!(
-        parts.files.iter().map(|f| f.estimated_bytes).sum::<u64>(),
-        big
-    );
-    assert!(parts.files.iter().all(|f| f.estimated_bytes <= 20 * GIB));
-
-    settings.split = false;
-    let small = plan::plan(&settings, "mailbox", 49 * GIB, &[]);
-    assert!(!small.over_outlook_limit);
+    let measured = Ok(pstoff_engine::OutputPlan::new(vec![
+        pstoff_engine::PlannedFile {
+            path: t.root.join("mailbox.pst"),
+            estimated_bytes: 51 * GIB,
+            part: 1,
+            items: 1,
+        },
+    ]));
+    let preview = plan::plan(&settings, "mailbox", Some(&measured), &[]);
+    assert_eq!(preview.files.len(), 1);
+    assert_eq!(preview.files[0].name, "mailbox.pst");
+    assert_eq!(preview.estimated_bytes, 51 * GIB);
+    assert!(preview.over_outlook_limit);
+    assert!(plan::over_limit_text(preview.estimated_bytes).contains("50 GB"));
 }
 
 #[test]
@@ -308,6 +300,7 @@ fn existing_files_and_repeated_names_stop_the_output_step() {
     std::fs::create_dir_all(t.out()).unwrap();
     std::fs::write(t.out().join("a.pst"), b"earlier output").unwrap();
     w.set_destination(t.out());
+    measure(&mut w);
     let problems = w.output_problems();
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("never overwrites"), "{problems:?}");
@@ -315,6 +308,7 @@ fn existing_files_and_repeated_names_stop_the_output_step() {
     assert!(!w.can_go_next());
 
     w.set_base_name(ids[0], "B".into());
+    measure(&mut w);
     let problems = w.output_problems();
     assert!(
         problems[0].contains("already uses the name"),
@@ -325,6 +319,7 @@ fn existing_files_and_repeated_names_stop_the_output_step() {
     w.set_base_name(ids[0], "  ".into());
     assert!(w.output_problems()[0].contains("Enter a name"));
     w.set_base_name(ids[0], "fresh".into());
+    measure(&mut w);
     assert!(w.output_problems().is_empty());
     assert!(w.can_go_next());
     assert_eq!(
@@ -580,6 +575,7 @@ fn navigation_follows_the_rail() {
     w.back();
     assert_eq!(w.step, Step::Folders);
     w.set_destination(t.out());
+    measure(&mut w);
     w.go(Step::Convert);
     assert_eq!(w.step, Step::Convert);
     assert!(!w.can_go_next(), "Convert starts with its own button");
@@ -607,10 +603,64 @@ fn split_preview_numbers_even_a_single_part_and_detects_its_collision() {
         ..Default::default()
     };
     std::fs::write(t.root.join("mailbox-part001.pst"), b"keep").unwrap();
-    let preview = plan::plan(&settings, "mailbox", 1, &[]);
+    let measured = Ok(pstoff_engine::OutputPlan::new(vec![
+        pstoff_engine::PlannedFile {
+            path: t.root.join("mailbox-part001.pst"),
+            estimated_bytes: 1,
+            part: 1,
+            items: 1,
+        },
+    ]));
+    let preview = plan::plan(&settings, "mailbox", Some(&measured), &[]);
     assert_eq!(preview.files[0].name, "mailbox-part001.pst");
     assert!(preview.files[0].exists);
     assert!(preview.problem.is_some());
+}
+
+#[test]
+fn preview_waits_for_current_options_and_matches_real_conversion() {
+    let t = Temp::new();
+    let mut w = Wizard::new(real());
+    let id = add(&mut w, vec![t.write("m.ost", &mailbox())])[0];
+    w.set_destination(t.out());
+    let stale = w.plan_requests().pop().unwrap();
+    assert!(w
+        .plan_for(id)
+        .unwrap()
+        .problem
+        .unwrap()
+        .contains("Planning"));
+    let inbox = folder_named(w.source(id).unwrap().folders(), "Inbox");
+    w.toggle_folder(id, &inbox);
+    w.set_split(true);
+    assert!(w.plan_requests().is_empty(), "one worker per source");
+    let engine = w.engine();
+    w.apply_plan(&stale, engine.plan(&stale.path, &stale.options));
+    assert!(
+        w.plan_for(id).unwrap().files.is_empty(),
+        "stale boundaries cannot be shown"
+    );
+    measure(&mut w);
+    let preview = w.plan_for(id).unwrap();
+    assert!(preview.problem.is_none());
+    assert!(!t.out().exists());
+    w.go(Step::Convert);
+    w.start().unwrap().execute(engine.as_ref());
+    w.poll();
+    let reports = report::build(&w);
+    assert_eq!(reports[0].excluded_folders.len(), 1);
+    assert!(reports[0].excluded_folders[0].ends_with(" / Inbox"));
+    assert_eq!(preview.files.len(), reports[0].files.len());
+    for (planned, actual) in preview.files.iter().zip(&reports[0].files) {
+        assert_eq!(
+            planned.name,
+            actual.path.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(
+            planned.estimated_bytes,
+            std::fs::metadata(&actual.path).unwrap().len()
+        );
+    }
 }
 
 #[test]
@@ -641,4 +691,29 @@ fn incomplete_evidence_retains_findings_and_names_unchecked_items() {
     assert_eq!(evidence.value, "1 found; 1 not checked");
     assert!(evidence.references[0].contains("0x200024"));
     assert!(evidence.references[1].starts_with("Not checked: Item 0x200044"));
+}
+
+#[test]
+fn report_uses_saved_item_paths_and_inspection_explanation() {
+    let reference = pstoff_engine::ItemRef {
+        folder: pstoff_engine::FolderRef(0x182),
+        node: 0x200024,
+        folder_path: "Root / Recovered".into(),
+    };
+    assert_eq!(
+        report::item_label(&[], &reference),
+        "Item 0x200024 in Root / Recovered"
+    );
+    let t = Temp::new();
+    let mut w = Wizard::new(real());
+    add(&mut w, vec![t.write("m.ost", &mailbox())]);
+    w.sources[0]
+        .inspection
+        .as_mut()
+        .unwrap()
+        .mailbox_completeness_statement = "Explanation returned by Inspection".into();
+    assert_eq!(
+        report::completeness_statement(&w),
+        "Explanation returned by Inspection"
+    );
 }

@@ -332,6 +332,7 @@ pub fn item(folder: u32, node: u32) -> ItemRef {
     ItemRef {
         folder: pstoff_engine::FolderRef(folder),
         node,
+        folder_path: String::new(),
     }
 }
 
@@ -339,6 +340,8 @@ pub fn item(folder: u32, node: u32) -> ItemRef {
 /// checks will produce, for folders the real engine inspected.
 pub fn builder_report(t: &Temp, inbox: u32, sent: u32) -> ConversionReport {
     ConversionReport {
+        excluded_folders: vec![],
+        folder_paths: vec![],
         schema_version: pstoff_engine::REPORT_SCHEMA_VERSION,
         mailbox_completeness: MailboxCompleteness::Unknown,
         mailbox_completeness_statement: MAILBOX_COMPLETENESS_STATEMENT.into(),
@@ -358,18 +361,21 @@ pub fn builder_report(t: &Temp, inbox: u32, sent: u32) -> ConversionReport {
         ],
         folders: vec![
             FolderPart {
+                folder_path: String::new(),
                 folder: pstoff_engine::FolderRef(inbox),
                 part: 1,
                 items: 2,
                 bytes: 2000,
             },
             FolderPart {
+                folder_path: String::new(),
                 folder: pstoff_engine::FolderRef(inbox),
                 part: 2,
                 items: 1,
                 bytes: 1000,
             },
             FolderPart {
+                folder_path: String::new(),
                 folder: pstoff_engine::FolderRef(sent),
                 part: 2,
                 items: 1,
@@ -378,11 +384,13 @@ pub fn builder_report(t: &Temp, inbox: u32, sent: u32) -> ConversionReport {
         ],
         skipped: vec![
             Skipped {
+                folder_path: String::new(),
                 code: pstoff_engine::SkipReason::UnreadableItem,
                 reference: LocalRef::Item(item(inbox, 0x200024)),
                 reason: "The message body could not be read.".into(),
             },
             Skipped {
+                folder_path: String::new(),
                 code: pstoff_engine::SkipReason::UnreadableFolder,
                 reference: LocalRef::Folder(pstoff_engine::FolderRef(sent)),
                 reason: "The folder table could not be read.".into(),

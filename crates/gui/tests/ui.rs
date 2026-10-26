@@ -72,11 +72,12 @@ fn answer_prompt(
     cx.run_until_parked();
 }
 
-fn choose_destination(cx: &mut VisualTestContext, out: PathBuf) {
+fn choose_destination(view: &Entity<WizardView>, cx: &mut VisualTestContext, out: PathBuf) {
     answer_prompt(cx, "destination", move |options| {
         assert!(options.directories && !options.files);
         Some(vec![out])
     });
+    pump_until(view, cx, |v| v.wizard.output_problems().is_empty());
 }
 
 #[gpui::test]
@@ -98,7 +99,7 @@ fn back_and_next_step_through_the_rail(cx: &mut TestAppContext) {
         Step::Output,
         "Next waits for a destination"
     );
-    choose_destination(cx, t.out());
+    choose_destination(&view, cx, t.out());
     click(cx, "next");
     assert_eq!(step(&view, cx), Step::Convert);
     click(cx, "back");
@@ -232,7 +233,7 @@ fn output_choices_reach_the_convert_options(cx: &mut TestAppContext) {
     add(&view, cx, vec![t.write("mailbox.ost", &mailbox())]);
     click(cx, "next");
     click(cx, "next");
-    choose_destination(cx, t.out());
+    choose_destination(&view, cx, t.out());
     assert!(shown(cx, "preview"));
 
     click(cx, "base-name-0");
@@ -240,6 +241,7 @@ fn output_choices_reach_the_convert_options(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("a r c h i v e enter");
     click(cx, "split");
     click(cx, "gib-10");
+    pump_until(&view, cx, |v| v.wizard.output_problems().is_empty());
     let (options, preview) = view.read_with(cx, |v, _| {
         let id = v.wizard.sources[0].id;
         (
@@ -275,7 +277,7 @@ fn converting_keeps_drawing_and_cancel_asks_first(cx: &mut TestAppContext) {
         vec![t.write("a.ost", &mailbox()), t.write("b.ost", &mailbox())],
     );
     click(cx, "step-2");
-    choose_destination(cx, t.out());
+    choose_destination(&view, cx, t.out());
     click(cx, "next");
     assert!(
         shown(cx, "completeness-before"),
@@ -333,7 +335,7 @@ fn report_opens_with_the_completeness_note(cx: &mut TestAppContext) {
         vec![t.write("a.ost", &mailbox()), t.write("b.ost", &mailbox())],
     );
     click(cx, "step-2");
-    choose_destination(cx, t.out());
+    choose_destination(&view, cx, t.out());
     click(cx, "next");
     click(cx, "start");
     pump_until(&view, cx, |v| v.wizard.step == Step::Report);
@@ -379,7 +381,7 @@ fn report_renders_evidence_split_skips_and_differences(cx: &mut TestAppContext) 
             builder_report(&t, inbox, sent),
         ))));
     click(cx, "step-2");
-    choose_destination(cx, t.out());
+    choose_destination(&view, cx, t.out());
     click(cx, "next");
     click(cx, "start");
     pump_until(&view, cx, |v| v.wizard.step == Step::Report);

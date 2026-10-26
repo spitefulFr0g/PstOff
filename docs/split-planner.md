@@ -3,7 +3,12 @@
 Based on `origin/fix/issue-20-recovery-evidence` at
 `49614294cb81a289e7386c288be5716599e0fa6f` (remote head verified).
 
-Split enumerates readable selected whole Items in global node-ID order. Each
+The shared no-write planning follow-up is described in
+[shared-plan-report.md](shared-plan-report.md). It replaces the trial-file sizing
+implementation described below while retaining the same packing and publication
+policy. The validation notes in this document describe the earlier branch.
+
+The earlier Split implementation enumerates readable selected whole Items in global node-ID order. Each
 candidate is written and finalized in staging, including Microsoft allocation-map
 regeneration, before its actual file size is compared with the inclusive byte
 limit. An accepted part is published with a numbered name only when its boundary

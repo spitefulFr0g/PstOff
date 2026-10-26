@@ -1,5 +1,9 @@
 # GPUI wizard continuation (#20, #37–#40)
 
+The shared engine preview and report-schema follow-up is recorded in
+[shared-plan-report.md](shared-plan-report.md); the notes below describe the
+earlier GUI milestone.
+
 Worktree: `t3-8239c749`, branch `t3/issue-20-gui-wizard`.
 The substantial inherited uncommitted GUI work was preserved. Integration
 fast-forwarded the branch from `92f2b870` to the engine/CLI chain at `7cc035f2`,

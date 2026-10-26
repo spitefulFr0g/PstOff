@@ -161,6 +161,7 @@ fn unsupported_header_variants_are_reported_by_inspect_and_rejected_by_convert()
         let stdout = String::from_utf8(inspected.stdout).unwrap();
         assert!(stdout.contains("Support: unsupported"), "{name}: {stdout}");
         assert!(stdout.contains(reason), "{name}: {stdout}");
+        assert!(stdout.contains(pstoff_engine::MAILBOX_COMPLETENESS_STATEMENT));
 
         let converted = Command::new(env!("CARGO_BIN_EXE_pstoff"))
             .arg("convert")

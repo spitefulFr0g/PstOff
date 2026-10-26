@@ -1,14 +1,11 @@
 //! Output choices and the preview of the PST files they produce.
-//!
-//! The engine has no plan or dry-run call yet (#35), so the preview is the
-//! wizard's own estimate from the inspected folder sizes. It names the files the
-//! way the spec names them and says the sizes are estimates.
+//! The engine supplies whole-Item boundaries and finalized layout sizes.
 use crate::format::{self, GIB};
 use pstoff_engine::{ConvertOptions, FolderRef, Split, DEFAULT_SPLIT_BYTES};
 use std::path::{Path, PathBuf};
 
 /// Outlook's default maximum size for a Unicode PST (50 GB).
-pub const OUTLOOK_DEFAULT_LIMIT_BYTES: u64 = 50 * GIB;
+pub const OUTLOOK_DEFAULT_LIMIT_BYTES: u64 = pstoff_engine::OUTLOOK_DEFAULT_LIMIT_BYTES;
 /// Split size choices in GiB. The middle choice is the engine's default limit.
 pub const SPLIT_CHOICES_GIB: [u64; 4] = [5, 10, 20, 40];
 pub const DEFAULT_SPLIT_GIB: u64 = DEFAULT_SPLIT_BYTES / GIB;
@@ -68,7 +65,7 @@ pub struct PlannedFile {
 pub struct SourcePlan {
     pub files: Vec<PlannedFile>,
     pub estimated_bytes: u64,
-    /// Without Split, the PST would pass Outlook's default size limit.
+    /// At least one planned PST would pass Outlook's default size limit.
     pub over_outlook_limit: bool,
     pub problem: Option<String>,
 }
@@ -76,29 +73,24 @@ pub struct SourcePlan {
 pub fn plan(
     settings: &OutputSettings,
     base_name: &str,
-    selected_bytes: u64,
+    measured: Option<&Result<pstoff_engine::OutputPlan, pstoff_engine::EngineError>>,
     taken: &[String],
 ) -> SourcePlan {
     let base = base_name.trim();
-    let parts = match settings.split_limit() {
-        Split::Bytes(limit) if limit > 0 => selected_bytes.div_ceil(limit).max(1),
-        _ => 1,
-    };
-    let names: Vec<String> = if !settings.split {
-        vec![format!("{base}.pst")]
-    } else {
-        (1..=parts)
-            .map(|n| format!("{base}-part{n:03}.pst"))
-            .collect()
-    };
     let destination = settings.destination.as_deref();
-    let files: Vec<PlannedFile> = names
+    let engine_plan = measured.and_then(|result| result.as_ref().ok());
+    let files: Vec<PlannedFile> = engine_plan
         .into_iter()
-        .enumerate()
-        .map(|(i, name)| PlannedFile {
-            exists: destination.is_some_and(|d| d.join(&name).exists()),
-            name,
-            estimated_bytes: share(selected_bytes, parts, i as u64),
+        .flat_map(|p| &p.files)
+        .map(|file| PlannedFile {
+            name: file
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            estimated_bytes: file.estimated_bytes,
+            exists: file.path.exists(),
         })
         .collect();
     let problem = base_name_problem(base)
@@ -118,20 +110,16 @@ pub fn plan(
                 format!("Files named “{base}” are already in this folder. PstOff never overwrites them; choose another name or folder.")
             })
         });
+    let problem = problem.or_else(|| match measured {
+        None => Some("Planning output…".into()),
+        Some(Err(error)) => Some(error.message.clone()),
+        Some(Ok(_)) => None,
+    });
     SourcePlan {
-        over_outlook_limit: !settings.split && selected_bytes > OUTLOOK_DEFAULT_LIMIT_BYTES,
-        estimated_bytes: selected_bytes,
+        over_outlook_limit: engine_plan.is_some_and(|p| p.over_outlook_limit),
+        estimated_bytes: files.iter().map(|f| f.estimated_bytes).sum(),
         files,
         problem,
-    }
-}
-
-fn share(total: u64, parts: u64, index: u64) -> u64 {
-    let each = total / parts;
-    if index + 1 == parts {
-        total - each * (parts - 1)
-    } else {
-        each
     }
 }
 

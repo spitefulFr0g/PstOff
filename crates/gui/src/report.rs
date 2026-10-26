@@ -56,6 +56,7 @@ pub struct OstReport {
     /// Shown when the Items went into more than one part.
     pub folder_parts: Vec<FolderPartRow>,
     pub skipped: Vec<(String, String)>,
+    pub excluded_folders: Vec<String>,
     pub differences: Vec<DifferenceRow>,
     pub saved_report: Option<PathBuf>,
 }
@@ -71,6 +72,13 @@ pub fn completeness_statement(wizard: &Wizard) -> String {
                     ..
                 }) => Some(report.mailbox_completeness_statement.clone()),
                 _ => None,
+            })
+        })
+        .or_else(|| {
+            wizard.ready().find_map(|s| {
+                s.inspection
+                    .as_ref()
+                    .map(|i| i.mailbox_completeness_statement.clone())
             })
         })
         .unwrap_or_else(|| MAILBOX_COMPLETENESS_STATEMENT.to_string())
@@ -99,6 +107,7 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
                 files: Vec::new(),
                 folder_parts: Vec::new(),
                 skipped: Vec::new(),
+                excluded_folders: Vec::new(),
                 differences: Vec::new(),
                 saved_report: None,
             };
@@ -153,6 +162,11 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
 }
 
 fn fill_complete(out: &mut OstReport, report: &ConversionReport, tree: &[Folder]) {
+    out.excluded_folders = report
+        .excluded_folders
+        .iter()
+        .map(|f| f.path.clone())
+        .collect();
     out.evidence = vec![
         evidence_row(
             "Headers-only items",
@@ -185,7 +199,11 @@ fn fill_complete(out: &mut OstReport, report: &ConversionReport, tree: &[Folder]
             .folders
             .iter()
             .map(|f| FolderPartRow {
-                folder: folder_path(tree, &f.folder),
+                folder: if f.folder_path.is_empty() {
+                    folder_path(tree, &f.folder)
+                } else {
+                    f.folder_path.clone()
+                },
                 part: f.part,
                 items: f.items,
             })
@@ -196,7 +214,14 @@ fn fill_complete(out: &mut OstReport, report: &ConversionReport, tree: &[Folder]
         .iter()
         .map(|s| {
             let what = match &s.reference {
-                LocalRef::Folder(folder) => format!("Folder {}", folder_path(tree, folder)),
+                LocalRef::Folder(folder) => format!(
+                    "Folder {}",
+                    if s.folder_path.is_empty() {
+                        folder_path(tree, folder)
+                    } else {
+                        s.folder_path.clone()
+                    }
+                ),
                 LocalRef::Item(item) => item_label(tree, item),
             };
             (what, s.reason.clone())
@@ -267,7 +292,11 @@ pub fn item_label(tree: &[Folder], item: &ItemRef) -> String {
     format!(
         "Item 0x{:x} in {}",
         item.node,
-        folder_path(tree, &item.folder)
+        if item.folder_path.is_empty() {
+            folder_path(tree, &item.folder)
+        } else {
+            item.folder_path.clone()
+        }
     )
 }
 

@@ -528,7 +528,7 @@ impl Writer {
     }
     fn finish(self) -> Vec<u8> {
         assert!(
-            self.nodes.len() <= 126 && self.blocks.len() <= 169,
+            self.nodes.len() <= 126 && self.blocks.len() <= 169 * 169,
             "synthetic index capacity exceeded"
         );
         let mut b = vec![0; 12288];
@@ -562,7 +562,27 @@ impl Writer {
             bbt.extend(entry);
         }
         b[4096..8192].copy_from_slice(&page(&nbt, 32, 0x81, 4, 4096));
-        b[8192..12288].copy_from_slice(&page(&bbt, 24, 0x80, 8, 8192));
+        if bbt.len() <= 169 * 24 {
+            b[8192..12288].copy_from_slice(&page(&bbt, 24, 0x80, 8, 8192));
+        } else {
+            // Large synthetic payloads need a two-level BBT. Keep the original
+            // single-page layout byte-identical for existing small fixtures.
+            let mut parents = Vec::new();
+            for (index, entries) in bbt.chunks(169 * 24).enumerate() {
+                let at = b.len().div_ceil(4096) * 4096;
+                let id = 0x1_0000_0000 + index as u64 * 4;
+                b.resize(at, 0);
+                b.extend(page(entries, 24, 0x80, id, at));
+                parents.extend(&entries[..8]);
+                parents.extend(id.to_le_bytes());
+                parents.extend((at as u64).to_le_bytes());
+            }
+            let mut root = page(&parents, 24, 0x80, 8, 8192);
+            root[4061] = 1;
+            let sum = crc(&root[..4072]);
+            p32(&mut root, 4076, sum);
+            b[8192..12288].copy_from_slice(&root);
+        }
         b[..4].copy_from_slice(b"!BDN");
         b[8..10].copy_from_slice(b"SO");
         p16(&mut b, 10, 36);

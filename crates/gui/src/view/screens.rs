@@ -547,7 +547,7 @@ impl WizardView {
                 format::plural(file_count as u64, "PST file", "PST files")
             )))
             .child(secondary(
-                "Sizes are estimates from the folder sizes until the conversion runs.",
+                "Sizes include PST structure and whole Items. Planning does not create output files.",
             ))
             .children(plans.iter().map(|(s, p)| {
                 div()
@@ -993,6 +993,19 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                         )))
                 }),
             )
+        })
+        .when(complete && !r.excluded_folders.is_empty(), |d| {
+            d.child(section("Excluded folders"))
+                .child(secondary(
+                    "These selections and their subfolders were left out.",
+                ))
+                .children(
+                    r.excluded_folders
+                        .iter()
+                        .take(SHOWN)
+                        .map(|path| list_row().child(path.clone())),
+                )
+                .children(more(r.excluded_folders.len()))
         })
         .when(complete && !r.skipped.is_empty(), |d| {
             d.child(section("Skipped items"))

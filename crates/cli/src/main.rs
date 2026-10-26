@@ -1,6 +1,6 @@
 use pstoff_engine::{
-    convert, inspect, CancelToken, Conversion, ConvertOptions, ErrorKind, FolderRef, Progress,
-    Split, Support,
+    convert, inspect, plan, CancelToken, Conversion, ConvertOptions, ErrorKind, FolderRef,
+    Progress, Split, Support,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -19,17 +19,18 @@ const CANCELLED: u8 = 130;
 
 const HELP: &str = "Usage: pstoff inspect <ost>
        pstoff convert <ost> --out <dir> [--base-name <name>]
-              [--exclude-folder <id>]... [--split-limit <bytes|off>]
+              [--exclude-folder <id>]... [--split-limit <bytes|off>] [--dry-run]
 
 Folder IDs are printed by inspect (decimal or 0x-prefixed hexadecimal accepted).
 Exclusions include descendants. Split defaults to 21474836480 bytes (20 GiB).
 Progress goes to stderr. Reports go to the output folder.
+Dry run prints the shared engine plan as JSON and creates no files or folders.
 Exit codes: 0 success, 1 failure, 2 usage, 3 unsupported, 4 in use,
             5 insufficient space/oversized Item, 6 success with skips, 130 cancelled.";
 
 enum Command {
     Inspect(PathBuf),
-    Convert(PathBuf, ConvertOptions),
+    Convert(PathBuf, ConvertOptions, bool),
     Help,
 }
 
@@ -55,7 +56,15 @@ fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
         .into_owned();
     let mut options = ConvertOptions::new(PathBuf::new(), base);
     let (mut out, mut base, mut split) = (false, false, false);
+    let mut dry_run = false;
     while let Some(flag) = args.next() {
+        if flag == "--dry-run" {
+            if dry_run {
+                return Err("Repeated option: --dry-run".into());
+            }
+            dry_run = true;
+            continue;
+        }
         if flag != "--out"
             && flag != "--base-name"
             && flag != "--exclude-folder"
@@ -108,7 +117,7 @@ fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     if !out || options.destination.as_os_str().is_empty() {
         return Err("An output folder (--out) is required.".into());
     }
-    Ok(Command::Convert(path, options))
+    Ok(Command::Convert(path, options, dry_run))
 }
 
 fn error_code(kind: &ErrorKind) -> u8 {
@@ -134,7 +143,23 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Inspect(path) => run_inspect(&path),
-        Command::Convert(path, options) => run_convert(&path, &options),
+        Command::Convert(path, options, true) => match plan(&path, &options) {
+            Ok(plan) => match serde_json::to_string_pretty(&plan) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(_) => {
+                    eprintln!("Could not serialize the output plan.");
+                    ExitCode::from(FAILURE)
+                }
+            },
+            Err(error) => {
+                eprintln!("Planning failed: {error}");
+                ExitCode::from(error_code(&error.kind))
+            }
+        },
+        Command::Convert(path, options, false) => run_convert(&path, &options),
     }
 }
 
@@ -197,6 +222,7 @@ fn run_inspect(path: &Path) -> ExitCode {
     match inspect(path) {
         Ok(result) => {
             println!("Source: {}", result.source.display());
+            println!("{}", result.mailbox_completeness_statement);
             let code = match result.support {
                 Support::Supported => {
                     println!("Support: supported");

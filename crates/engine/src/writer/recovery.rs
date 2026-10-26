@@ -55,6 +55,7 @@ fn reference(n: &Node) -> ItemRef {
     ItemRef {
         folder: FolderRef(n.nid_parent),
         node: n.nid,
+        folder_path: String::new(),
     }
 }
 fn evidence(references: Vec<ItemRef>, unchecked: &[ItemRef]) -> Evidence {
@@ -113,6 +114,7 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
         if lost.contains(&n.nid) && matches!(n.nid_type(), 2 | 3) {
             omitted.insert(n.nid);
             skipped.push(Skipped {
+                folder_path: String::new(),
                 reference: LocalRef::Folder(FolderRef(n.nid)),
                 code: if bad_folders.contains(&n.nid) {
                     SkipReason::UnreadableFolder
@@ -146,6 +148,7 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
             unreadable.push(item.clone());
             unchecked.push(item.clone());
             skipped.push(Skipped {
+                folder_path: String::new(),
                 reference: LocalRef::Item(item),
                 code: if ancestor {
                     SkipReason::UnreadableAncestor

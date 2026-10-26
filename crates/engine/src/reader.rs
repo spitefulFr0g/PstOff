@@ -318,5 +318,6 @@ pub(super) fn inspect(path: &Path) -> Result<Inspection, EngineError> {
         source: path.into(),
         support,
         folders,
+        mailbox_completeness_statement: crate::MAILBOX_COMPLETENESS_STATEMENT.into(),
     })
 }

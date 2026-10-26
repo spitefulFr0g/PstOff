@@ -583,6 +583,21 @@ impl WizardView {
 
 impl Render for WizardView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for request in self.wizard.plan_requests() {
+            let engine = self.wizard.engine();
+            let worker = request.clone();
+            let task = cx
+                .background_executor()
+                .spawn(async move { engine.plan(&worker.path, &worker.options) });
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.wizard.apply_plan(&request, result);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         self.frames += 1;
         let (title, subtitle) = self.heading();
         let content = match self.wizard.step {

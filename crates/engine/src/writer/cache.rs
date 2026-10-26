@@ -67,7 +67,7 @@ pub(super) fn prepare(
                                 .is_some_and(|v| v.kind == value.kind && v.bytes == value.bytes)
                         }) {
                             entry.insert(value.clone());
-                            differences.push(Difference { property:0x30080040, item:Some(ItemRef {folder:FolderRef(node.nid_parent),node:node.nid}), source:format!("Same Item cache tables {:?}",rows.iter().map(|r| r.0).collect::<Vec<_>>()), reason:"Q12: validated, agreeing source FILETIME; no server-history claim.".into() });
+                            differences.push(Difference { property:0x30080040, item:Some(ItemRef {folder:FolderRef(node.nid_parent),node:node.nid,folder_path:String::new()}), source:format!("Same Item cache tables {:?}",rows.iter().map(|r| r.0).collect::<Vec<_>>()), reason:"Q12: validated, agreeing source FILETIME; no server-history claim.".into() });
                         } else {
                             return Err(format!("Q12 conflict for Item 0x{:x}", node.nid).into());
                         }
@@ -133,6 +133,7 @@ pub(super) fn prepare(
                             item: Some(ItemRef {
                                 folder: FolderRef(node.nid_parent),
                                 node: node.nid,
+                                folder_path: String::new(),
                             }),
                             source: format!(
                                 "Same Item cache tables {:?}",

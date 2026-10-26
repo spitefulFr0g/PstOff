@@ -11,7 +11,8 @@ use std::sync::{
 };
 
 pub const DEFAULT_SPLIT_BYTES: u64 = 21_474_836_480;
-pub const REPORT_SCHEMA_VERSION: u32 = 2;
+pub const REPORT_SCHEMA_VERSION: u32 = 3;
+pub const OUTLOOK_DEFAULT_LIMIT_BYTES: u64 = 50 * 1024 * 1024 * 1024;
 /// An OST records cached contents, not the server mailbox's full history.
 pub const MAILBOX_COMPLETENESS_STATEMENT: &str = "Mailbox completeness: unknown. An OST holds only what Outlook synced. Items or folders that were never synced cannot be recovered from this file.";
 
@@ -21,6 +22,13 @@ pub struct FolderRef(pub u32);
 pub struct ItemRef {
     pub folder: FolderRef,
     pub node: u32,
+    #[serde(default)]
+    pub folder_path: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderPath {
+    pub folder: FolderRef,
+    pub path: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnsupportedReason {
@@ -50,6 +58,11 @@ pub struct Inspection {
     pub source: PathBuf,
     pub support: Support,
     pub folders: Vec<Folder>,
+    #[serde(default = "completeness_statement")]
+    pub mailbox_completeness_statement: String,
+}
+fn completeness_statement() -> String {
+    MAILBOX_COMPLETENESS_STATEMENT.into()
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Split {
@@ -61,7 +74,7 @@ impl Default for Split {
         Self::Bytes(DEFAULT_SPLIT_BYTES)
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConvertOptions {
     pub destination: PathBuf,
     pub base_name: String,
@@ -119,8 +132,36 @@ pub struct OutputFile {
     pub part: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedFile {
+    pub path: PathBuf,
+    pub estimated_bytes: u64,
+    pub part: u32,
+    pub items: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputPlan {
+    pub files: Vec<PlannedFile>,
+    /// Absolute per-file tolerance for an unchanged source and options.
+    pub size_tolerance_bytes: u64,
+    pub over_outlook_limit: bool,
+}
+impl OutputPlan {
+    pub fn new(files: Vec<PlannedFile>) -> Self {
+        let over_outlook_limit = files
+            .iter()
+            .any(|f| f.estimated_bytes > OUTLOOK_DEFAULT_LIMIT_BYTES);
+        Self {
+            files,
+            size_tolerance_bytes: 0,
+            over_outlook_limit,
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderPart {
     pub folder: FolderRef,
+    #[serde(default)]
+    pub folder_path: String,
     pub part: u32,
     pub items: u64,
     pub bytes: u64,
@@ -140,6 +181,8 @@ pub enum SkipReason {
 pub struct Skipped {
     pub code: SkipReason,
     pub reference: LocalRef,
+    #[serde(default)]
+    pub folder_path: String,
     pub reason: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +228,25 @@ pub struct ConversionReport {
     pub skipped: Vec<Skipped>,
     pub differences: Vec<Difference>,
     pub evidence: CompletenessEvidence,
+    /// Explicit selection only; descendant exclusions are implied by policy.
+    #[serde(default)]
+    pub excluded_folders: Vec<FolderPath>,
+    /// Paths for every local folder reference, including skipped/recovered ones.
+    #[serde(default)]
+    pub folder_paths: Vec<FolderPath>,
+}
+impl ConversionReport {
+    pub fn folder_path(&self, folder: &FolderRef) -> String {
+        // Engine reports are sorted by ID. Keep a fallback for callers loading
+        // or constructing a report whose lookup is in a different order.
+        self.folder_paths
+            .binary_search_by_key(&folder.0, |p| p.folder.0)
+            .ok()
+            .map(|index| &self.folder_paths[index])
+            .or_else(|| self.folder_paths.iter().find(|p| &p.folder == folder))
+            .map(|p| p.path.clone())
+            .unwrap_or_else(|| format!("Folder 0x{:x}", folder.0))
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ErrorKind {
@@ -233,6 +295,12 @@ pub enum BatchResult {
 /// Unsupported formats and Windows sharing violations are explicit store outcomes.
 pub fn inspect(path: impl AsRef<Path>) -> Result<Inspection, EngineError> {
     reader::inspect(path.as_ref())
+}
+/// Read and measure the conversion layout without creating any files or folders.
+/// Payloads are decoded for layout measurement; this can take as long as conversion.
+/// Recomputed at conversion time, so edits to the source invalidate an earlier plan.
+pub fn plan(path: impl AsRef<Path>, options: &ConvertOptions) -> Result<OutputPlan, EngineError> {
+    conversion::plan(path.as_ref(), options)
 }
 /// Convert a supported OST in Copy mode through the public policy boundary.
 pub fn convert(

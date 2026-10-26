@@ -91,6 +91,83 @@ fn status(output: &Output, code: i32) {
 }
 
 #[test]
+fn dry_run_creates_nothing_and_json_plan_matches_conversion() {
+    fn payload() -> Item {
+        let mut item = Item::new("IPM.Note", 1);
+        item.attachments
+            .push(synthetic::Attachment::Bytes(vec![0x42; 30_000]));
+        item
+    }
+    let calibration = Fixture::new(vec![payload()]);
+    let one = calibration.command().arg("--dry-run").output().unwrap();
+    status(&one, 0);
+    let one: pstoff_engine::OutputPlan = serde_json::from_slice(&one.stdout).unwrap();
+    let limit = one.files[0].estimated_bytes.to_string();
+    let f = Fixture::new(vec![payload(), payload()]);
+    let measured = f
+        .command()
+        .args(["--dry-run", "--split-limit", &limit])
+        .output()
+        .unwrap();
+    status(&measured, 0);
+    let plan: pstoff_engine::OutputPlan = serde_json::from_slice(&measured.stdout).unwrap();
+    assert_eq!(plan.size_tolerance_bytes, 0);
+    assert!(!f.out.exists());
+    assert_eq!(std::fs::read_dir(&f.root).unwrap().count(), 1);
+    assert_eq!(plan.files.len(), 2);
+    let result = f
+        .command()
+        .args(["--split-limit", &limit])
+        .output()
+        .unwrap();
+    status(&result, 0);
+    let report = f.report("synthetic");
+    assert_eq!(plan.files.len(), report.files.len());
+    for (planned, actual) in plan.files.iter().zip(&report.files) {
+        assert_eq!(planned.path, actual.path);
+        assert_eq!(planned.estimated_bytes, actual.bytes);
+    }
+    // Dry run also leaves existing reports and PSTs byte-for-byte intact.
+    let before = std::fs::read(&report.files[0].path).unwrap();
+    status(
+        &f.command()
+            .args(["--dry-run", "--split-limit", &limit])
+            .output()
+            .unwrap(),
+        0,
+    );
+    assert_eq!(std::fs::read(&report.files[0].path).unwrap(), before);
+    assert_eq!(std::fs::read_dir(&f.out).unwrap().count(), 4);
+}
+
+#[test]
+fn dry_run_validates_packing_and_exclusions_without_creating_a_destination() {
+    let f = Fixture::new(vec![Item::new("IPM.Note", 1)]);
+    status(
+        &f.command()
+            .args(["--dry-run", "--split-limit", "1"])
+            .output()
+            .unwrap(),
+        5,
+    );
+    status(
+        &f.command()
+            .args(["--dry-run", "--exclude-folder", "0xffffffff"])
+            .output()
+            .unwrap(),
+        1,
+    );
+    status(
+        &f.command()
+            .args(["--dry-run", "--dry-run"])
+            .output()
+            .unwrap(),
+        2,
+    );
+    assert!(!f.out.exists());
+}
+
+#[test]
 fn convert_out_writes_pst_and_reports_with_stderr_progress() {
     let f = Fixture::new(vec![Item::new("IPM.Note", 42)]);
     let result = f.command().output().unwrap();

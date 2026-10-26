@@ -128,6 +128,31 @@ fn saves_reports_with_source_identity_counts_and_completeness_explanation() {
     assert!(text.contains("Source store and system folder hierarchy"));
     assert!(text.contains("PST display name comes from the source file name."));
 }
+
+#[test]
+fn prior_report_data_survives_schema_three_deserialization_defaults() {
+    let (_f, report) = complete(&source(), "schema");
+    let mut old = serde_json::to_value(&report).unwrap();
+    fn remove_paths(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for key in ["excluded_folders", "folder_paths", "folder_path"] {
+                    fields.remove(key);
+                }
+                fields.values_mut().for_each(remove_paths);
+            }
+            serde_json::Value::Array(values) => values.iter_mut().for_each(remove_paths),
+            _ => (),
+        }
+    }
+    old["schema_version"] = 2.into();
+    remove_paths(&mut old);
+    let decoded: pstoff_engine::ConversionReport = serde_json::from_value(old.clone()).unwrap();
+    assert!(decoded.folder_paths.is_empty());
+    let mut roundtrip = serde_json::to_value(decoded).unwrap();
+    remove_paths(&mut roundtrip);
+    assert_eq!(old, roundtrip, "all previous report fields remain intact");
+}
 #[test]
 fn final_name_is_absent_until_publication_and_cancellation_cleans_staging() {
     let f = support::Fixture::invalid();
@@ -396,7 +421,22 @@ fn unreadable_folder_skips_its_subtree_and_preserves_healthy_siblings() {
         ..Default::default()
     });
     let bytes = store.build();
-    let (_f, report) = complete(&bytes, "folder-recovery");
+    let (f, report) = complete(&bytes, "folder-recovery");
+    let inspection = inspect(&f.source).unwrap();
+    assert_eq!(
+        inspection.mailbox_completeness_statement,
+        report.mailbox_completeness_statement
+    );
+    let json = std::fs::read_to_string(f.root.join("out/folder-recovery.json")).unwrap();
+    let text = std::fs::read_to_string(f.root.join("out/folder-recovery.txt")).unwrap();
+    for skipped in &report.skipped {
+        assert!(skipped.folder_path.contains(" / (unnamed)"));
+        assert!(json.contains(&skipped.folder_path));
+        assert!(text.contains(&skipped.folder_path));
+        if let pstoff_engine::LocalRef::Item(item) = &skipped.reference {
+            assert_eq!(item.folder_path, skipped.folder_path);
+        }
+    }
     assert_eq!(report.skipped.len(), 4); // Two folders, two Items, each with a local reason.
     assert_eq!(report.folders.len(), 5);
     assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
@@ -429,7 +469,18 @@ fn validated_markers_and_external_refs_are_separate_from_unreadable_content() {
     unrelated
         .properties
         .push(synthetic::Property::int(0x8001, 1));
-    let (_f, report) = complete(&source_items(vec![headers, unrelated]), "evidence");
+    let (f, report) = complete(&source_items(vec![headers, unrelated]), "evidence");
+    for evidence in [
+        &report.evidence.headers_only,
+        &report.evidence.external_references,
+    ] {
+        let pstoff_engine::Evidence::Checked { references, .. } = evidence else {
+            panic!("checked evidence")
+        };
+        assert!(references[0].folder_path.ends_with(" / IPM_SUBTREE"));
+        let text = std::fs::read_to_string(f.root.join("out/evidence.txt")).unwrap();
+        assert!(text.contains(&references[0].folder_path));
+    }
     checked(&report.evidence.headers_only, 1);
     checked(&report.evidence.external_references, 1);
     checked(&report.evidence.unreadable, 0);
@@ -621,6 +672,117 @@ fn assert_source_hash(f: &support::Fixture, hash: &str) {
         format!("{:x}", Sha256::digest(std::fs::read(&f.source).unwrap())),
         hash
     );
+}
+
+#[test]
+fn public_plan_writes_nothing_and_matches_whole_item_outputs_and_overhead() {
+    use pstoff_engine::{plan, Split};
+    let (f, folders, hash) = split_fixture();
+    let mut single = ConvertOptions::new(f.root.join("absent"), "measure".into());
+    single.exclusions = vec![folders[1].clone(), folders[2].clone()];
+    let size = plan(&f.source, &single).unwrap().files[0].estimated_bytes;
+    assert!(size > 30_000);
+    assert!(!single.destination.exists());
+    for (i, split, exclusions) in [
+        (0, Split::Off, vec![]),
+        (1, Split::Bytes(size), vec![folders[2].clone()]),
+        (2, Split::Bytes(size), single.exclusions.clone()),
+        (
+            3,
+            Split::default(),
+            vec![inspect(&f.source).unwrap().folders[0].id.clone()],
+        ),
+    ] {
+        let mut options =
+            ConvertOptions::new(f.root.join(format!("planned-{i}")), "mailbox".into());
+        options.split = split;
+        options.exclusions = exclusions;
+        let planned = plan(&f.source, &options).unwrap();
+        assert_eq!(planned.size_tolerance_bytes, 0);
+        assert!(
+            !options.destination.exists(),
+            "planning must not even create the destination"
+        );
+        if i == 1 {
+            assert_eq!(planned.files.len(), 2);
+            assert!(planned.files.iter().all(|p| p.items == 1));
+        }
+        let report = split_report(convert(
+            &f.source,
+            &options,
+            &mut |_| {},
+            &CancelToken::default(),
+        ));
+        assert_eq!(planned.files.len(), report.files.len());
+        for (planned, actual) in planned.files.iter().zip(&report.files) {
+            assert_eq!(planned.path, actual.path);
+            assert_eq!(planned.part, actual.part);
+            assert_eq!(planned.estimated_bytes, actual.bytes);
+            assert_eq!(
+                planned.items,
+                report
+                    .folders
+                    .iter()
+                    .filter(|f| f.part == actual.part)
+                    .map(|f| f.items)
+                    .sum::<u64>()
+            );
+        }
+    }
+    single.split = Split::Bytes(size - 1);
+    assert!(matches!(
+        plan(&f.source, &single).unwrap_err().kind,
+        pstoff_engine::ErrorKind::OversizedItem(_)
+    ));
+    assert!(!single.destination.exists());
+    assert_source_hash(&f, &hash);
+}
+
+#[test]
+fn plan_matches_finalization_across_multiple_allocation_maps_with_nested_payloads() {
+    for length in [1_800_000, 2_100_000] {
+        let f = support::Fixture::invalid();
+        let mut item = Item::new("IPM.Note", 1); // Deliberately misleading declared size.
+        item.attachments
+            .push(synthetic::Attachment::Bytes(vec![0x42; length]));
+        std::fs::write(&f.source, source_items(vec![item])).unwrap();
+        let options = unsplit_options(f.root.join("out"), "maps".into());
+        let planned = pstoff_engine::plan(&f.source, &options).unwrap();
+        assert!(planned.files[0].estimated_bytes > length as u64);
+        if length == 1_800_000 {
+            assert_eq!(
+                planned.files[0].estimated_bytes,
+                0x4400 + 8 * (496 * 8 * 64) + 1024,
+                "the pinned finalizer writes an extra PMAP beyond the eighth AMAP's data"
+            );
+        }
+        assert!(!options.destination.exists());
+        let report = split_report(convert(
+            &f.source,
+            &options,
+            &mut |_| {},
+            &CancelToken::default(),
+        ));
+        assert_eq!(planned.files[0].estimated_bytes, report.files[0].bytes);
+        outlook_pst::open_store(&report.files[0].path).unwrap();
+    }
+}
+
+#[test]
+fn plan_warns_for_simulated_large_file_at_the_inclusive_outlook_boundary() {
+    use pstoff_engine::{OutputPlan, PlannedFile, OUTLOOK_DEFAULT_LIMIT_BYTES};
+    for (bytes, warning) in [
+        (OUTLOOK_DEFAULT_LIMIT_BYTES, false),
+        (OUTLOOK_DEFAULT_LIMIT_BYTES + 1, true),
+    ] {
+        let plan = OutputPlan::new(vec![PlannedFile {
+            path: "simulated.pst".into(),
+            estimated_bytes: bytes,
+            part: 1,
+            items: 1,
+        }]);
+        assert_eq!(plan.over_outlook_limit, warning);
+    }
 }
 
 fn run_split(
@@ -852,6 +1014,14 @@ fn exclusions_cascade_and_update_progress_evidence_and_folder_mapping() {
             .folders
             .iter()
             .all(|f| f.folder != parent.id && f.folder != parent.children[0].id));
+        assert_eq!(report.excluded_folders.len(), 1);
+        assert_eq!(report.excluded_folders[0].folder, parent.id);
+        assert!(report.excluded_folders[0].path.ends_with(" / Excluded"));
+        let saved = std::fs::read_to_string(options.destination.join("selected.json")).unwrap();
+        let text = std::fs::read_to_string(options.destination.join("selected.txt")).unwrap();
+        assert!(saved.contains(&report.excluded_folders[0].path));
+        assert!(text.contains("Excluded folder"));
+        assert!(text.contains(&report.excluded_folders[0].path));
         assert!(report.skipped.is_empty());
         checked(&report.evidence.headers_only, 0);
         checked(&report.evidence.unreadable, 0);

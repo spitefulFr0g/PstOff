@@ -43,7 +43,9 @@ impl Drop for Partial<'_> {
 }
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 struct Output {
-    file: File,
+    // None is the no-write layout pass. It uses the same heap, block and index
+    // emission, retaining metadata but discarding bytes as soon as measured.
+    file: Option<File>,
     pos: u64,
     next: u64,
     blocks: Vec<(u64, Vec<u8>)>,
@@ -77,8 +79,10 @@ impl Output {
         }
     }
     fn write(&mut self, at: u64, data: &[u8]) -> Result<()> {
-        self.file.seek(SeekFrom::Start(at))?;
-        self.file.write_all(data)?;
+        if let Some(file) = &mut self.file {
+            file.seek(SeekFrom::Start(at))?;
+            file.write_all(data)?;
+        }
         self.pos = at + data.len() as u64;
         Ok(())
     }
@@ -408,6 +412,29 @@ pub(super) fn write(
     progress: &mut dyn crate::ProgressSink,
     cancel: &crate::CancelToken,
 ) -> Result<Option<Vec<crate::Difference>>> {
+    Ok(
+        emit(source, recovery, Some(path), display, progress, cancel)?
+            .map(|(_, differences)| differences),
+    )
+}
+
+pub(super) fn measure(
+    source: &mut Pst,
+    recovery: &recovery::Recovery,
+    display: &str,
+    cancel: &crate::CancelToken,
+) -> Result<Option<u64>> {
+    Ok(emit(source, recovery, None, display, &mut |_| {}, cancel)?.map(|(bytes, _)| bytes))
+}
+
+fn emit(
+    source: &mut Pst,
+    recovery: &recovery::Recovery,
+    path: Option<&Path>,
+    display: &str,
+    progress: &mut dyn crate::ProgressSink,
+    cancel: &crate::CancelToken,
+) -> Result<Option<(u64, Vec<crate::Difference>)>> {
     let nodes = &recovery.nodes;
     let omitted = &recovery.omitted;
     let total = nodes
@@ -437,12 +464,16 @@ pub(super) fn write(
     else {
         return Ok(None);
     };
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .read(true)
-        .create_new(true)
-        .open(path)?;
-    let mut partial = Partial { path, keep: false };
+    let file = path
+        .map(|path| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create_new(true)
+                .open(path)
+        })
+        .transpose()?;
+    let mut partial = path.map(|path| Partial { path, keep: false });
     let mut out = Output {
         file,
         pos: AMAP + 2048,
@@ -574,7 +605,9 @@ pub(super) fn write(
     let blocks = std::mem::take(&mut out.blocks);
     let bbt = out.tree(blocks, 0x80, 24)?;
     let eof = out.pos.div_ceil(512) * 512;
-    out.file.set_len(eof)?;
+    if let Some(file) = &out.file {
+        file.set_len(eof)?;
+    }
     let mut h = source.header_bytes()?;
     h.resize(564, 0);
     h[24..44].fill(0);
@@ -616,11 +649,42 @@ pub(super) fn write(
     let crc = crc32(&h[8..524]);
     p32(&mut h, 524, crc);
     out.write(0, &h)?;
-    out.file.sync_all()?;
+    if let Some(file) = &out.file {
+        file.sync_all()?;
+    }
     let differences = std::mem::take(&mut out.differences);
     drop(out);
-    let mut pst = UnicodePstFile::open(path)?;
-    pst.lock()?.flush()?;
-    partial.keep = true;
-    Ok(Some(differences))
+    let bytes = finalized_size(eof);
+    if let Some(path) = path {
+        let mut pst = UnicodePstFile::open(path)?;
+        pst.lock()?.flush()?;
+        // Keep the sizing contract fail-closed if the pinned finalizer changes.
+        if std::fs::metadata(path)?.len() != bytes {
+            return Err("Finalized PST size differs from the measured layout".into());
+        }
+        partial.as_mut().unwrap().keep = true;
+    }
+    Ok(Some((bytes, differences)))
+}
+
+// The pinned Microsoft finalizer rewrites reserved AMAP/FMAP/FPMAP slots and
+// the density list in place. Its inclusive PMAP loop also writes the next PMAP
+// when the AMAP count is an exact multiple of eight, possibly extending EOF.
+fn finalized_size(eof: u64) -> u64 {
+    let maps = (eof - AMAP).div_ceil(INTERVAL);
+    eof.max(AMAP + (maps / 8) * 8 * INTERVAL + 1024)
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+
+    #[test]
+    fn finalizer_accounts_for_the_extra_pmap_at_eight_map_boundaries() {
+        let boundary = AMAP + 8 * INTERVAL;
+        assert_eq!(finalized_size(boundary - INTERVAL + 512), boundary + 1024);
+        assert_eq!(finalized_size(boundary - 512), boundary + 1024);
+        assert_eq!(finalized_size(boundary), boundary + 1024);
+        assert_eq!(finalized_size(boundary + 4096), boundary + 4096);
+    }
 }

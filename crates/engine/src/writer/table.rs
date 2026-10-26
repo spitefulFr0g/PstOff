@@ -258,6 +258,7 @@ impl Table {
                     item: Some(ItemRef {
                         folder: FolderRef(node.nid_parent),
                         node: *row,
+                        folder_path: String::new(),
                     }),
                     source: format!("Contents table 0x{nid:x}, same Item property context"),
                     reason: reason.into(),

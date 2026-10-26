@@ -6,6 +6,56 @@ use pstoff_format::{
 };
 use std::collections::HashSet;
 
+/// Greedy global-NID packing. Both preview and conversion measure these same
+/// whole-Item candidates, including all selected folder and finalizer overhead.
+pub(crate) fn next_part(
+    source: &mut Pst,
+    selection: &Selection,
+    start: usize,
+    split: Split,
+    display: &str,
+    cancel: &CancelToken,
+) -> Result<Option<(usize, u64)>, EngineError> {
+    let splitting = matches!(split, Split::Bytes(_));
+    let mut end = if splitting {
+        (start + 1).min(selection.items.len())
+    } else {
+        selection.items.len()
+    };
+    let mut accepted = None;
+    loop {
+        let candidate = selection.part(&selection.items[start..end], splitting);
+        let Some(bytes) = writer::measure(source, &candidate, display, cancel)
+            .map_err(crate::conversion::layout_failure)?
+        else {
+            return Ok(None);
+        };
+        if matches!(split, Split::Bytes(limit) if bytes > limit) {
+            if accepted.is_some() {
+                return Ok(accepted);
+            }
+            if let Some(item) = selection.items.get(start) {
+                let reference = ItemRef {
+                    folder: FolderRef(item.nid_parent),
+                    node: item.nid,
+                    folder_path: String::new(),
+                };
+                return Err(EngineError {
+                    kind: ErrorKind::OversizedItem(reference.clone()),
+                    message: format!("Folder 0x{:x}, Item 0x{:x} needs {bytes} bytes in an otherwise empty finalized PST. Increase the Split limit or exclude this folder and retry with a new output base name. Any finished parts are kept.", reference.folder.0, reference.node),
+                    completed_files: vec![],
+                });
+            }
+            return Err(EngineError { kind: ErrorKind::InvalidOptions, message: format!("Required empty PST system folders need {bytes} bytes; increase the Split limit."), completed_files: vec![] });
+        }
+        accepted = Some((end, bytes));
+        if end == selection.items.len() {
+            return Ok(accepted);
+        }
+        end += 1;
+    }
+}
+
 pub(crate) fn excluded(
     nodes: &[Node],
     requested: &[FolderRef],
