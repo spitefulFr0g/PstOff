@@ -1,0 +1,32 @@
+name: Linux portable Cargo checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-cargo:
+    name: Portable engine and CLI (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all --check --locked
+
+      - name: Run Clippy for portable crates
+        run: cargo clippy --locked --all-targets -p pstoff-engine -p pstoff-cli -- -D warnings
+
+      - name: Test portable crates
+        run: cargo test --locked -p pstoff-engine -p pstoff-cli

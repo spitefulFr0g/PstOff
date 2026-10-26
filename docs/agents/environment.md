@@ -20,13 +20,23 @@ WSL (user `watermelon`) no longer hosts development. It keeps three things:
 - **History from the first #20 implementation run**, in `~/.codex/spec-notes/spitefulFr0g-PstOff-20/`. Its branches are now in the Windows checkout, and its notes and logs are copied to the gitignored `.scratch/spec-notes-20/`. Treat it as read-only.
 - **The old checkout** at `~/dev/PstOff`, with the research worktrees. Read-only.
 
-## Windows Sandbox build route
+## Local Windows Sandbox build route
 
-The rules are in `docs/agents/safety.md`. Run Cargo through `python scripts/sandbox-cargo.py <cargo args>`; run the full audit, fmt, clippy and test suite through `python scripts/check`. Use `python scripts/sandbox-cargo.py --probe` to verify guest networking is disabled and the source map rejects writes. The wrapper stages each worktree snapshot under `%TEMP%`, keeps a separate persistent target directory per worktree, and serializes Sandbox sessions with a host lock. Its Cargo cache is shared under `%TEMP%`. The parts on this machine:
+The rules are in `docs/agents/safety.md`. For builds and checks on this Windows machine, run Cargo through `python scripts/sandbox-cargo.py <cargo args>`; run the full audit, fmt, clippy and test suite through `python scripts/check`. Use `python scripts/sandbox-cargo.py --probe` to verify guest networking is disabled and the source map rejects writes. The wrapper stages each worktree snapshot under `%TEMP%`, keeps a separate persistent target directory per worktree, and serializes Sandbox sessions with a host lock. Its Cargo cache is shared under `%TEMP%`. The parts on this machine:
 
 - Rust stable MSVC, installed inside a guest and mapped read-only: `%TEMP%\PstOffRustInstall-8zzvegc3\install`.
 - MSVC from Visual Studio 2022 Community (14.44.35207) and Windows SDK 10.0.26100.0, mapped read-only from their install folders.
 - The wrapper uses MSVC 14.44.35207 and SDK 10.0.26100.0 from those paths.
+
+## Linux portable Cargo CI
+
+GitHub Actions may run the portable `pstoff-engine` and `pstoff-cli` Cargo
+checks on Ubuntu, using the workspace's supported Rust version 1.89. This
+platform-neutral lane runs formatting, Clippy and tests; it does not build the
+Windows GUI or establish Windows GUI/release acceptance. It also does not
+establish Faithful acceptance, which requires the checks in
+`docs/agents/faithful-checks.md`. Local Windows builds and checks still use
+Windows Sandbox as described above.
 
 ## GUI smoke run
 
