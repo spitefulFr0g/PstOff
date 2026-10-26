@@ -57,9 +57,30 @@ class SandboxCargoTests(unittest.TestCase):
             self.assertIn("C:\\PstOffSource\\sandbox-write-probe.tmp", contents)
 
     def test_existing_sandbox_process_is_detected(self):
-        result = mock.Mock(stdout='"WindowsSandbox.exe","4321","Console","1","12 K"\n')
+        result = mock.Mock(
+            returncode=0,
+            stdout='"WindowsSandbox.exe","4321","Console","1","12 K"\n',
+        )
         with mock.patch.object(sandbox_cargo.subprocess, "run", return_value=result):
             self.assertEqual(sandbox_cargo.sandbox_processes(), [4321])
+
+    def test_process_enumeration_failure_is_not_treated_as_no_sandbox(self):
+        result = mock.Mock(returncode=1, stdout="", stderr="Access denied")
+        with mock.patch.object(sandbox_cargo.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "Could not establish"):
+                sandbox_cargo.sandbox_processes()
+
+    def test_malformed_matching_process_record_is_rejected(self):
+        for stdout in (
+            '"WindowsSandbox.exe"\n',
+            '"WindowsSandbox.exe","not-a-pid","Console","1","12 K"\n',
+            '"WindowsSandbox.exe","0","Console","1","12 K"\n',
+        ):
+            result = mock.Mock(returncode=0, stdout=stdout, stderr="")
+            with self.subTest(stdout=stdout):
+                with mock.patch.object(sandbox_cargo.subprocess, "run", return_value=result):
+                    with self.assertRaisesRegex(RuntimeError, "Malformed WindowsSandbox"):
+                        sandbox_cargo.sandbox_processes()
 
     def test_unfinished_guest_times_out(self):
         process = mock.Mock()

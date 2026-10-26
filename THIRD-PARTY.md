@@ -26,8 +26,11 @@ The graph also includes adler2, byteorder, once_cell, pin-project-lite,
 proc-macro2, quote, serde_core/derive, syn, thiserror/impl, tracing/attributes/core,
 unicode-ident and windows-link. All offer MIT, with unicode-ident additionally
 requiring Unicode-3.0, a permissive notice license compatible with MIT.
-Keep that additional notice in distributions. The imported pstfree library
-sources are byte-for-byte upstream; only the manifest/package name changed.
+Keep that additional notice in distributions. The vendored `pstoff-format`
+package is based on upstream pstfree commit
+`b6e2ff31592f74458f0481d4671251c92044d8f0`, with local adaptations to strict
+reader validation and v36 heap decoding. The upstream MIT notice is retained;
+the local changes are tracked in this repository.
 
 The tracer writer reuses the repository's `ticket/20-writer` implementation
 at `49aa687`, including store policy and rebuilt PC/TC contexts. It does not

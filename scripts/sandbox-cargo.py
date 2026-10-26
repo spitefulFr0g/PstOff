@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import os
 import shutil
 import subprocess
@@ -100,14 +102,35 @@ def sandbox_processes() -> list[int]:
         stderr=subprocess.PIPE,
         check=False,
     )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(
+            f"Could not establish whether Windows Sandbox is running "
+            f"(tasklist exit code {result.returncode})"
+            + (f": {detail}" if detail else ".")
+        )
     pids = []
-    for line in result.stdout.splitlines():
-        fields = line.strip().strip('"').split('","')
-        if len(fields) >= 2 and fields[0].casefold() == "windowssandbox.exe":
-            try:
-                pids.append(int(fields[1]))
-            except ValueError:
-                pass
+    try:
+        rows = csv.reader(io.StringIO(result.stdout), strict=True)
+        for fields in rows:
+            if not fields:
+                continue
+            if fields[0].strip().casefold() == "windowssandbox.exe":
+                if len(fields) < 2:
+                    raise RuntimeError(
+                        "Malformed WindowsSandbox.exe record from tasklist."
+                    )
+                try:
+                    pid = int(fields[1])
+                except ValueError as exc:
+                    raise RuntimeError(
+                        "Malformed WindowsSandbox.exe PID from tasklist."
+                    ) from exc
+                if pid <= 0:
+                    raise RuntimeError("Malformed WindowsSandbox.exe PID from tasklist.")
+                pids.append(pid)
+    except csv.Error as exc:
+        raise RuntimeError("Could not parse Windows Sandbox process list.") from exc
     return pids
 
 

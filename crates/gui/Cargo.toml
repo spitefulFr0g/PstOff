@@ -3,8 +3,7 @@ name = "pstoff-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-# GPUI is an edition 2024 crate.
-rust-version = "1.85"
+rust-version.workspace = true
 publish = false
 
 [dependencies]
