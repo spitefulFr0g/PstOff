@@ -32,9 +32,12 @@ The rules are in `docs/agents/safety.md`. For builds and checks on this Windows 
 
 GitHub Actions may run the portable `pstoff-engine` and `pstoff-cli` Cargo
 checks on Ubuntu, using the workspace's supported Rust version 1.89. This
-platform-neutral lane runs formatting, Clippy and tests; it does not build the
-Windows GUI or establish Windows GUI/release acceptance. It also does not
-establish Faithful acceptance, which requires the checks in
+platform-neutral lane runs formatting, Clippy and portable inspection, reader,
+validation and format tests. Engine tests that reach Windows disk preflight are
+ignored on non-Windows (but still compiled); CLI conversion tests are Windows-gated.
+Conversion/preflight tests remain enabled for Windows Sandbox checks. This lane
+does not build the Windows GUI or establish Windows conversion/GUI/release
+acceptance. It also does not establish Faithful acceptance, which requires the checks in
 `docs/agents/faithful-checks.md`. Local Windows builds and checks still use
 Windows Sandbox as described above.
 

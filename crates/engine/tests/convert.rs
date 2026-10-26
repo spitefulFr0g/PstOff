@@ -1,3 +1,7 @@
+// Tests that reach disk preflight require Windows. Ignore them on other
+// platforms so they remain visible and compile under Clippy --all-targets.
+// Collision/stale-staging and invalid-option rejections below run before
+// preflight and stay enabled on every platform.
 mod support;
 #[allow(dead_code)]
 #[path = "support/synthetic.rs"]
@@ -47,6 +51,7 @@ fn source_store(items: Vec<Item>) -> Store {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn converts_synthetic_ost_to_readable_pst_without_modifying_source() {
     let f = support::Fixture::invalid();
     let bytes = source();
@@ -94,6 +99,7 @@ fn converts_synthetic_ost_to_readable_pst_without_modifying_source() {
     assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn saves_reports_with_source_identity_counts_and_completeness_explanation() {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, source()).unwrap();
@@ -129,6 +135,7 @@ fn saves_reports_with_source_identity_counts_and_completeness_explanation() {
     assert!(text.contains("PST display name comes from the source file name."));
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn final_name_is_absent_until_publication_and_cancellation_cleans_staging() {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, source()).unwrap();
@@ -176,6 +183,7 @@ fn existing_pst_reports_and_staging_are_never_overwritten() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn a_destination_created_during_conversion_is_preserved_and_reports_are_rolled_back() {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, source()).unwrap();
@@ -199,6 +207,7 @@ fn a_destination_created_during_conversion_is_preserved_and_reports_are_rolled_b
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn cancellation_between_items_reports_progress_and_removes_partial_output() {
     let f = support::Fixture::invalid();
     let mut item = Item::new("IPM.Note", 100);
@@ -247,6 +256,7 @@ fn cancellation_between_items_reports_progress_and_removes_partial_output() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn all_item_classes_and_short_non_final_streams_round_trip_with_valid_totals() {
     use outlook_pst::ltp::prop_context::PropertyValue;
     use pstoff_format::ndb::Pst;
@@ -352,6 +362,7 @@ fn checked(e: &pstoff_engine::Evidence, expected: usize) {
     assert_eq!(references.len(), expected);
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn unreadable_item_is_skipped_and_contents_counts_are_repaired() {
     let mut damaged = Item::new("IPM.Note", 100);
     damaged.unreadable = true;
@@ -381,6 +392,7 @@ fn unreadable_item_is_skipped_and_contents_counts_are_repaired() {
     assert_eq!(folder.contents_table().unwrap().rows_matrix().count(), 1);
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn unreadable_folder_skips_its_subtree_and_preserves_healthy_siblings() {
     let mut store = source_store(vec![Item::new("IPM.Note", 90)]);
     let subtree = &mut store.root.children[0].children[1];
@@ -419,6 +431,7 @@ fn unreadable_folder_skips_its_subtree_and_preserves_healthy_siblings() {
     }
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn validated_markers_and_external_refs_are_separate_from_unreadable_content() {
     let mut headers = Item::new("IPM.Note", 10);
     headers.headers_only = true;
@@ -436,6 +449,7 @@ fn validated_markers_and_external_refs_are_separate_from_unreadable_content() {
     assert!(report.skipped.is_empty());
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn invalid_marker_type_or_external_path_is_not_reported_as_checked_zero() {
     let mut item = Item::new("IPM.Note", 10);
     item.properties.push(synthetic::Property::text(0x8000, "1"));
@@ -475,6 +489,7 @@ fn leftover_staging_for_another_base_is_flagged_without_touching_it() {
     assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 1);
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn free_space_preflight_rejects_large_declared_output_before_staging() {
     let f = support::Fixture::invalid();
     let bytes = source();
@@ -491,6 +506,7 @@ fn free_space_preflight_rejects_large_declared_output_before_staging() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn damaged_nested_attachment_is_an_item_skip_not_a_store_failure() {
     let mut inner = Item::new("IPM.Note", 10);
     inner.unreadable = true;
@@ -507,6 +523,7 @@ fn damaged_nested_attachment_is_an_item_skip_not_a_store_failure() {
     assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn headers_only_uses_named_property_identity_not_a_fixed_property_id() {
     let mut item = Item::new("IPM.Note", 10);
     item.properties.push(synthetic::Property::int(0x8123, 1));
@@ -529,6 +546,7 @@ fn headers_only_uses_named_property_identity_not_a_fixed_property_id() {
     checked(&report.evidence.headers_only, 0);
 }
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn unreadable_required_folder_or_table_gets_empty_output_scaffolding() {
     for table in [false, true] {
         let mut store = source_store(vec![Item::new("IPM.Note", 100)]);
@@ -556,6 +574,7 @@ fn unreadable_required_folder_or_table_gets_empty_output_scaffolding() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn skipped_global_item_ids_do_not_remove_local_recipient_rows() {
     let mut damaged = Item::new("IPM.Note", 10);
     damaged.unreadable = true;
@@ -645,6 +664,7 @@ fn split_report(
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn split_uses_finished_file_boundary_including_overhead_and_keeps_whole_items() {
     use outlook_pst::ltp::prop_context::PropertyValue;
     let (f, folders, hash) = split_fixture();
@@ -757,6 +777,7 @@ fn split_uses_finished_file_boundary_including_overhead_and_keeps_whole_items() 
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn oversized_item_and_cancel_keep_finished_parts_and_clean_unfinished_output() {
     let (f, folders, hash) = split_fixture();
     let measured = split_report(run_split(
@@ -808,6 +829,7 @@ fn oversized_item_and_cancel_keep_finished_parts_and_clean_unfinished_output() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn exclusions_cascade_and_update_progress_evidence_and_folder_mapping() {
     let mut store = source_store(vec![Item::new("IPM.Note", 100)]);
     let mut header = Item::new("IPM.Contact", 200);
@@ -875,6 +897,7 @@ fn exclusions_cascade_and_update_progress_evidence_and_folder_mapping() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn split_retains_populated_folder_ancestors_and_omits_empty_siblings() {
     let mut store = source_store(vec![]);
     store.root.children[0].children[1].children.push(Folder {
@@ -939,6 +962,7 @@ fn invalid_split_and_unknown_exclusion_publish_nothing_and_preserve_source_hash(
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn later_split_name_collision_preserves_finished_parts_and_existing_file() {
     let (f, folders, hash) = split_fixture();
     let measured = split_report(run_split(
@@ -997,6 +1021,7 @@ fn independent_rows(
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn q16_aliased_cells_require_an_exact_item_property_in_normal_and_associated_tables() {
     use outlook_pst::ltp::prop_context::PropertyValue;
     use synthetic::Property;
@@ -1092,6 +1117,7 @@ fn cache_pair(counter: u8) -> Vec<synthetic::Property> {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn q15_conflict_preserves_public_source_error_kind_and_local_context() {
     for property in [0x65e2, 0x65e3] {
         let f = support::Fixture::invalid();
@@ -1135,6 +1161,7 @@ fn q15_conflict_preserves_public_source_error_kind_and_local_context() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn q12_and_q15_agreeing_cache_values_are_recovered_and_reported() {
     use outlook_pst::ltp::prop_context::PropertyValue;
     let mut item = Item::new("IPM.Note", 10);
@@ -1173,6 +1200,7 @@ fn q12_and_q15_agreeing_cache_values_are_recovered_and_reported() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn report_failures_after_publication_roll_back_unsplit_outputs_but_keep_split_parts() {
     // Arm deterministic filesystem faults through the public progress sink.
     // At 0.95 staging exists; PST publication precedes report writing/renaming.
@@ -1280,6 +1308,7 @@ fn independent_subnodes(
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn microsoft_reader_verifies_recipients_attachment_bytes_and_associated_item_properties() {
     use outlook_pst::{
         ltp::prop_context::PropertyValue,
