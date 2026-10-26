@@ -98,7 +98,12 @@ def main():
     c.add_argument('--out', type=Path, help='also write both full inventories here')
     t = sub.add_parser('tree')
     t.add_argument('store', type=Path)
+    s = sub.add_parser('synthetic-probe', help='hash-only synthetic fixture inventory')
+    s.add_argument('store', type=Path)
     args = parser.parse_args()
+    if args.command == 'synthetic-probe':
+        print(sandboxed('synthetic_probe.py', args.store), end='')
+        return 0
     if args.command == 'tree':
         print(sandboxed('tree_probe.py', args.store), end='')
         return 0

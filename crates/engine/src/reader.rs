@@ -224,11 +224,15 @@ pub(super) fn inspect(path: &Path) -> Result<Inspection, EngineError> {
                         folder.unreadable = Some("A folder table could not be read.".into());
                     }
                 }
-                children_by_parent
-                    .entry(node.nid_parent)
-                    .or_default()
-                    .push(node.nid);
-                parents.insert(node.nid, node.nid_parent);
+                // MS-PST's root folder points to itself. That one self-reference
+                // terminates the hierarchy; every other cycle remains damage.
+                let parent = if node.nid == ltp::NID_ROOT_FOLDER && node.nid_parent == node.nid {
+                    0
+                } else {
+                    node.nid_parent
+                };
+                children_by_parent.entry(parent).or_default().push(node.nid);
+                parents.insert(node.nid, parent);
                 flat.insert(node.nid, folder);
             }
             // A cycle is damage, not an excuse to silently hide folders or recurse forever.

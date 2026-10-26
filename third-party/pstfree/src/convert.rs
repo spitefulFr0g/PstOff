@@ -340,7 +340,7 @@ enum Hnid {
 /// the three entry ids, a display name if it has none, the mask saying which of those
 /// are valid, and a password of 0.
 fn pst_store(pst: &mut Pst, nodes: &[Node], store: &Node) -> Result<Vec<u8>, String> {
-    let heap = Heap::new(pst.node_blocks(store.bid_data)?)?;
+    let heap = Heap::for_version(pst.node_blocks(store.bid_data)?, pst.ver)?;
     let (_, records) = bth_records(&heap)?;
     let mut props = std::collections::BTreeMap::new();
     for r in records.iter().filter(|r| r.len() >= 8) {

@@ -70,6 +70,7 @@ pub const ATTACH_BY_VALUE: i64 = 1;
 /// A heap spread over a node's blocks.
 pub struct Heap {
     blocks: Vec<Vec<u8>>,
+    block_shift: u32,
     /// What the heap contains: 0xBC for properties, 0x7C for a table.
     pub client_sig: u8,
     /// Heap id of whatever the client considers the root of its structure.
@@ -92,10 +93,21 @@ impl Heap {
             ));
         }
         Ok(Heap {
+            block_shift: 16,
             client_sig: b0[3],
             user_root: u32le(b0, 4),
             blocks,
         })
+    }
+
+    /// v36 expands the allocation index to 14 bits and starts the block index
+    /// at bit 19. Ordinary Unicode and ANSI heaps start it at bit 16.
+    pub fn for_version(blocks: Vec<Vec<u8>>, version: u16) -> Result<Heap, String> {
+        let mut heap = Self::new(blocks)?;
+        if version >= 36 {
+            heap.block_shift = 19;
+        }
+        Ok(heap)
     }
 
     /// The bytes of one heap allocation.
@@ -111,8 +123,8 @@ impl Heap {
         if hid & 0x1F != 0 {
             return Err(format!("0x{hid:08X} is a subnode id, not a heap id"));
         }
-        let index = ((hid >> 5) & 0x7FF) as usize;
-        let block = (hid >> 16) as usize;
+        let index = ((hid & ((1 << self.block_shift) - 1)) >> 5) as usize;
+        let block = (hid >> self.block_shift) as usize;
         if index == 0 {
             return Err(format!(
                 "heap id 0x{hid:08X} has allocation index 0, which cannot exist"
@@ -499,7 +511,7 @@ pub fn read_node_pc(pst: &mut Pst, node: &Node) -> Result<Pc, String> {
 /// Needs the file, not just the heap, because a value too big to fit the heap is stored
 /// out in the subnode tree and has to be fetched from there.
 pub fn read_pc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Pc, String> {
-    let heap = Heap::new(pst.node_blocks(bid_data)?)?;
+    let heap = Heap::for_version(pst.node_blocks(bid_data)?, pst.ver)?;
     if heap.client_sig != CLIENT_SIG_PC {
         return Err(format!(
             "heap holds client type 0x{:02X}, not a property context",
@@ -754,7 +766,7 @@ impl Row {
 /// however wide it is — a timestamp is eight bytes sitting in the row itself, not a
 /// reference to the heap. Only genuinely variable things go elsewhere.
 pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String> {
-    let heap = Heap::new(pst.node_blocks(bid_data)?)?;
+    let heap = Heap::for_version(pst.node_blocks(bid_data)?, pst.ver)?;
     if heap.client_sig != CLIENT_SIG_TC {
         return Err(format!(
             "heap holds client type 0x{:02X}, not a table context",
