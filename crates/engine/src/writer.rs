@@ -1,6 +1,7 @@
 //! Unicode NDB emission. All offsets and references are assigned afresh.
 mod cache;
 mod recovery;
+pub(crate) use recovery::Recovery;
 pub(super) use recovery::prepare as recover;
 mod context;
 mod store;
@@ -256,6 +257,42 @@ impl Output {
                     }) {
                         table.add_identity_row(n.nid);
                     }
+                    // Hierarchy rows cache child counts. Keep those caches in
+                    // agreement with the selected folder property contexts.
+                    for (folder, _, cells) in &mut table.rows {
+                        for (tag, cell) in cells.iter_mut() {
+                            let value = match tag >> 16 {
+                                0x3602 | 0x3617 => {
+                                    let kind = if tag >> 16 == 0x3602 { 4 } else { 8 };
+                                    Some(self.nodes.iter().filter(|n| {
+                                        n.nid_parent == *folder && n.nid_type() == kind
+                                    }).count() as u32)
+                                }
+                                0x360a => Some(u32::from(self.nodes.iter().any(|n| {
+                                    n.nid != *folder
+                                        && n.nid_parent == *folder
+                                        && matches!(n.nid_type(), 2 | 3)
+                                }))),
+                                _ => None,
+                            };
+                            if let Some(value) = value {
+                                let bytes = if cell.kind == 0xb {
+                                    vec![u8::from(value != 0)]
+                                } else {
+                                    value.to_le_bytes().to_vec()
+                                };
+                                if cell.bytes != bytes {
+                                    cell.bytes = bytes;
+                                    self.differences.push(crate::Difference {
+                                        property: *tag,
+                                        item: None,
+                                        source: format!("Hierarchy table 0x{nid:x}, Folder 0x{folder:x}"),
+                                        reason: "Folder cache reflects Items and children selected for this part.".into(),
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if matches!(nid & 31, 0x0e..=0x10) {
@@ -429,7 +466,7 @@ pub(super) fn write(
                         .count() as u32;
                     let bytes = count.to_le_bytes().to_vec();
                     if cell.bytes != bytes {
-                        out.differences.push(crate::Difference { property: (id as u32) << 16 | cell.kind as u32, item: None, source: format!("Folder 0x{:x}", node.nid), reason: "Folder count reflects readable Items retained after reported skips.".into() });
+                        out.differences.push(crate::Difference { property: (id as u32) << 16 | cell.kind as u32, item: None, source: format!("Folder 0x{:x}", node.nid), reason: "Folder count reflects Items selected for this part after exclusions and reported skips.".into() });
                         cell.bytes = bytes;
                     }
                 }
@@ -438,7 +475,20 @@ pub(super) fn write(
                 let has_children = nodes.iter().any(|n| {
                     n.nid != node.nid && n.nid_parent == node.nid && matches!(n.nid_type(), 2 | 3)
                 });
-                cell.bytes = u32::from(has_children).to_le_bytes().to_vec();
+                let bytes = if cell.kind == 0xb {
+                    vec![u8::from(has_children)]
+                } else {
+                    u32::from(has_children).to_le_bytes().to_vec()
+                };
+                if cell.bytes != bytes {
+                    cell.bytes = bytes;
+                    out.differences.push(crate::Difference {
+                        property: 0x360a0000 | cell.kind as u32,
+                        item: None,
+                        source: format!("Folder 0x{:x}", node.nid),
+                        reason: "Folder child flag reflects folders selected for this part.".into(),
+                    });
+                }
             }
             Some(cells)
         } else if node.nid == 0x21 {

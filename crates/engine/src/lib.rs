@@ -1,6 +1,7 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
 mod reader;
+mod planner;
 mod writer;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

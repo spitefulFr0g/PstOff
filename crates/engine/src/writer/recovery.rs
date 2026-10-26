@@ -7,6 +7,7 @@ use pstoff_format::{
 };
 use std::collections::{BTreeMap, HashSet};
 
+#[derive(Clone)]
 pub(crate) struct Recovery {
     pub nodes: Vec<Node>,
     pub created: BTreeMap<u32, String>,

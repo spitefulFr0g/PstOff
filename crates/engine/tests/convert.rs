@@ -5,6 +5,12 @@ mod synthetic;
 use pstoff_engine::{convert, inspect, CancelToken, Conversion, ConvertOptions};
 use synthetic::{Folder, Item, Store};
 
+fn unsplit_options(destination: std::path::PathBuf, name: String) -> ConvertOptions {
+    let mut options = ConvertOptions::new(destination, name);
+    options.split = pstoff_engine::Split::Off;
+    options
+}
+
 fn source() -> Vec<u8> {
     source_items(vec![Item::new("IPM.Note", 1234)])
 }
@@ -46,7 +52,7 @@ fn converts_synthetic_ost_to_readable_pst_without_modifying_source() {
     let bytes = source();
     std::fs::write(&f.source, &bytes).unwrap();
     let inspection = inspect(&f.source).unwrap();
-    let options = ConvertOptions::new(f.root.join("out"), "converted".into());
+    let options = unsplit_options(f.root.join("out"), "converted".into());
     let Conversion::Complete(report) =
         convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
     else {
@@ -91,7 +97,7 @@ fn converts_synthetic_ost_to_readable_pst_without_modifying_source() {
 fn saves_reports_with_source_identity_counts_and_completeness_explanation() {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, source()).unwrap();
-    let options = ConvertOptions::new(f.root.join("out"), "converted".into());
+    let options = unsplit_options(f.root.join("out"), "converted".into());
     convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap();
     let json = std::fs::read_to_string(options.destination.join("converted.json")).unwrap();
     let text = std::fs::read_to_string(options.destination.join("converted.txt")).unwrap();
@@ -126,7 +132,7 @@ fn saves_reports_with_source_identity_counts_and_completeness_explanation() {
 fn final_name_is_absent_until_publication_and_cancellation_cleans_staging() {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, source()).unwrap();
-    let options = ConvertOptions::new(f.root.join("out"), "converted".into());
+    let options = unsplit_options(f.root.join("out"), "converted".into());
     let token = CancelToken::default();
     let mut observed = false;
     let result = convert(
@@ -158,7 +164,7 @@ fn existing_pst_reports_and_staging_are_never_overwritten() {
     ] {
         let f = support::Fixture::invalid();
         std::fs::write(&f.source, source()).unwrap();
-        let options = ConvertOptions::new(f.root.join("out"), "converted".into());
+        let options = unsplit_options(f.root.join("out"), "converted".into());
         std::fs::create_dir(&options.destination).unwrap();
         let held = options.destination.join(name);
         std::fs::write(&held, b"keep").unwrap();
@@ -173,7 +179,7 @@ fn existing_pst_reports_and_staging_are_never_overwritten() {
 fn a_destination_created_during_conversion_is_preserved_and_reports_are_rolled_back() {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, source()).unwrap();
-    let options = ConvertOptions::new(f.root.join("out"), "converted".into());
+    let options = unsplit_options(f.root.join("out"), "converted".into());
     let final_path = options.destination.join("converted.pst");
     let error = convert(
         &f.source,
@@ -212,7 +218,7 @@ fn cancellation_between_items_reports_progress_and_removes_partial_output() {
         .unwrap()
         .id
         .clone();
-    let options = ConvertOptions::new(f.root.join("out"), "cancelled".into());
+    let options = unsplit_options(f.root.join("out"), "cancelled".into());
     let token = CancelToken::default();
     let mut events = vec![];
     let result = convert(
@@ -269,7 +275,7 @@ fn all_item_classes_and_short_non_final_streams_round_trip_with_valid_totals() {
         .collect();
     let bytes = source_items(items);
     std::fs::write(&f.source, &bytes).unwrap();
-    let options = ConvertOptions::new(f.root.join("out"), "classes".into());
+    let options = unsplit_options(f.root.join("out"), "classes".into());
     let Conversion::Complete(report) =
         convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
     else {
@@ -329,7 +335,7 @@ fn all_item_classes_and_short_non_final_streams_round_trip_with_valid_totals() {
 fn complete(bytes: &[u8], base: &str) -> (support::Fixture, pstoff_engine::ConversionReport) {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, bytes).unwrap();
-    let options = ConvertOptions::new(f.root.join("out"), base.into());
+    let options = unsplit_options(f.root.join("out"), base.into());
     let Conversion::Complete(report) =
         convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
     else {
@@ -454,7 +460,7 @@ fn invalid_marker_type_or_external_path_is_not_reported_as_checked_zero() {
 fn leftover_staging_for_another_base_is_flagged_without_touching_it() {
     let f = support::Fixture::invalid();
     std::fs::write(&f.source, source()).unwrap();
-    let options = ConvertOptions::new(f.root.join("out"), "new".into());
+    let options = unsplit_options(f.root.join("out"), "new".into());
     let stale = options.destination.join(".old.pstoff-partial");
     std::fs::create_dir_all(&stale).unwrap();
     std::fs::write(stale.join("output.pst"), b"synthetic unfinished output").unwrap();
@@ -473,7 +479,7 @@ fn free_space_preflight_rejects_large_declared_output_before_staging() {
     let f = support::Fixture::invalid();
     let bytes = source();
     std::fs::write(&f.source, &bytes).unwrap();
-    let mut options = ConvertOptions::new(f.root.join("out"), "too-large".into());
+    let mut options = unsplit_options(f.root.join("out"), "too-large".into());
     options.space_reserve_bytes = u64::MAX;
     let e = convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap_err();
     assert!(
@@ -575,4 +581,226 @@ fn skipped_global_item_ids_do_not_remove_local_recipient_rows() {
     let recipient = pst.subnodes(item.bid_sub).unwrap()[&0x692];
     let table = pstoff_format::ltp::read_tc(&mut pst, recipient.data, recipient.sub).unwrap();
     assert_eq!(table.rows.len(), 1);
+}
+
+fn split_fixture() -> (support::Fixture, Vec<pstoff_engine::FolderRef>, String) {
+    use sha2::{Digest, Sha256};
+    let mut store = source_store(vec![]);
+    let subtree = &mut store.root.children[0].children[1];
+    for (name, length, marker) in [("A", 30_000, 1), ("B", 30_000, 2), ("C", 120_000, 3)] {
+        let mut item = Item::new("IPM.Note", length);
+        item.properties.push(synthetic::Property::binary(0x6800, vec![marker; length as usize]));
+        subtree.children.push(Folder { name: name.into(), items: vec![item], ..Default::default() });
+    }
+    subtree.children.push(Folder { name: "Empty".into(), ..Default::default() });
+    let f = support::Fixture::invalid();
+    let bytes = store.build();
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+    std::fs::write(&f.source, bytes).unwrap();
+    let inspection = inspect(&f.source).unwrap();
+    let folders = inspection.folders[0].children[0].children[1].children[1..4]
+        .iter().map(|f| f.id.clone()).collect();
+    (f, folders, hash)
+}
+
+fn assert_source_hash(f: &support::Fixture, hash: &str) {
+    use sha2::{Digest, Sha256};
+    assert_eq!(format!("{:x}", Sha256::digest(std::fs::read(&f.source).unwrap())), hash);
+}
+
+fn run_split(f: &support::Fixture, base: &str, limit: u64, exclusions: Vec<pstoff_engine::FolderRef>) -> Result<Conversion, pstoff_engine::EngineError> {
+    let mut options = ConvertOptions::new(f.root.join(base), base.into());
+    options.split = pstoff_engine::Split::Bytes(limit);
+    options.exclusions = exclusions;
+    convert(&f.source, &options, &mut |_| {}, &CancelToken::default())
+}
+
+fn split_report(result: Result<Conversion, pstoff_engine::EngineError>) -> Box<pstoff_engine::ConversionReport> {
+    let Conversion::Complete(report) = result.unwrap() else { panic!("cancelled") };
+    report
+}
+
+#[test]
+fn split_uses_finished_file_boundary_including_overhead_and_keeps_whole_items() {
+    use outlook_pst::ltp::prop_context::PropertyValue;
+    let (f, folders, hash) = split_fixture();
+    let first = split_report(run_split(&f, "measure-a", u64::MAX, vec![folders[1].clone(), folders[2].clone()]));
+    let second = split_report(run_split(&f, "measure-b", u64::MAX, vec![folders[0].clone(), folders[2].clone()]));
+    let limit = first.files[0].bytes.max(second.files[0].bytes);
+    assert!(limit > 30_000, "limit must include PST overhead");
+    let report = split_report(run_split(&f, "parts", limit, vec![folders[2].clone()]));
+    assert_eq!(report.files.len(), 2);
+    assert_eq!(report.source_sha256, hash);
+    let mut payloads = vec![];
+    for file in &report.files {
+        assert!(file.bytes <= limit);
+        assert_eq!(std::fs::metadata(&file.path).unwrap().len(), file.bytes);
+        assert_eq!(file.path.file_name().unwrap().to_str().unwrap(), format!("parts-part{:03}.pst", file.part));
+        let store = outlook_pst::open_store(&file.path).unwrap();
+        let mut output = pstoff_format::ndb::Pst::open(file.path.to_str().unwrap()).unwrap();
+        let nodes = output.nodes();
+        let part_folders: Vec<_> = report.folders.iter().filter(|f| f.part == file.part).collect();
+        assert_eq!(part_folders.iter().map(|f| f.items).sum::<u64>(), 1);
+        assert_eq!(part_folders.len(), 6, "five system folders plus populated folder");
+        assert_eq!(nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)).count(), 6);
+        for folder in part_folders {
+            let id = store.properties().make_entry_id(outlook_pst::ndb::node_id::NodeId::from(folder.folder.0)).unwrap();
+            let actual = store.open_folder(&id).unwrap();
+            assert_eq!(actual.properties().content_count().unwrap() as u64, folder.items);
+            assert_eq!(actual.contents_table().unwrap().rows_matrix().count() as u64, folder.items);
+        }
+        for item in nodes.iter().filter(|n| n.nid_type() == 4) {
+            let id = store.properties().make_entry_id(outlook_pst::ndb::node_id::NodeId::from(item.nid)).unwrap();
+            let message = store.open_message(&id, None).unwrap();
+            let Some(PropertyValue::Binary(value)) = message.properties().get(0x6800) else { panic!("missing payload") };
+            assert_eq!(value.buffer().len(), 30_000);
+            assert!(value.buffer().iter().all(|b| *b == value.buffer()[0]));
+            payloads.push(value.buffer()[0]);
+        }
+    }
+    payloads.sort();
+    assert_eq!(payloads, [1, 2]);
+    assert_source_hash(&f, &hash);
+
+    let exact = first.files[0].bytes;
+    let report = split_report(run_split(&f, "exact", exact, vec![folders[1].clone(), folders[2].clone()]));
+    assert_eq!(report.files[0].bytes, exact);
+    let error = run_split(&f, "one-byte-under", exact - 1, vec![folders[1].clone(), folders[2].clone()]).unwrap_err();
+    assert!(matches!(error.kind, pstoff_engine::ErrorKind::OversizedItem(_)));
+    assert!(error.completed_files.is_empty());
+    assert_eq!(std::fs::read_dir(f.root.join("one-byte-under")).unwrap().count(), 0);
+    assert_source_hash(&f, &hash);
+}
+
+#[test]
+fn oversized_item_and_cancel_keep_finished_parts_and_clean_unfinished_output() {
+    let (f, folders, hash) = split_fixture();
+    let measured = split_report(run_split(&f, "measure", u64::MAX, vec![folders[1].clone(), folders[2].clone()]));
+    let limit = measured.files[0].bytes;
+    let error = run_split(&f, "oversized", limit, vec![]).unwrap_err();
+    let pstoff_engine::ErrorKind::OversizedItem(item) = &error.kind else { panic!("{error:?}") };
+    assert_eq!(item.folder, folders[2]);
+    assert!(error.message.contains(&format!("Item 0x{:x}", item.node)));
+    assert!(error.message.contains("Increase the Split limit"));
+    assert_eq!(error.completed_files.len(), 2);
+    for file in &error.completed_files {
+        assert!(file.bytes <= limit);
+        outlook_pst::open_store(&file.path).unwrap();
+    }
+    assert_eq!(std::fs::read_dir(f.root.join("oversized")).unwrap().count(), 2);
+    assert_source_hash(&f, &hash);
+
+    let mut options = ConvertOptions::new(f.root.join("cancel-parts"), "cancel".into());
+    options.split = pstoff_engine::Split::Bytes(limit);
+    let token = CancelToken::default();
+    let result = convert(&f.source, &options, &mut |p: pstoff_engine::Progress| {
+        if p.part == 2 { token.cancel(); }
+    }, &token).unwrap();
+    let Conversion::Cancelled { completed_files } = result else { panic!("expected cancellation") };
+    assert_eq!(completed_files.len(), 1);
+    assert!(completed_files[0].path.exists());
+    assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 1);
+    assert_source_hash(&f, &hash);
+}
+
+#[test]
+fn exclusions_cascade_and_update_progress_evidence_and_folder_mapping() {
+    let mut store = source_store(vec![Item::new("IPM.Note", 100)]);
+    let mut header = Item::new("IPM.Contact", 200);
+    header.headers_only = true;
+    let mut damaged = Item::new("IPM.Task", 300);
+    damaged.unreadable = true;
+    store.root.children[0].children[1].children.push(Folder {
+        name: "Excluded".into(), items: vec![header],
+        children: vec![Folder { name: "Child".into(), items: vec![damaged], ..Default::default() }],
+        ..Default::default()
+    });
+    let f = support::Fixture::invalid();
+    std::fs::write(&f.source, store.build()).unwrap();
+    use sha2::{Digest, Sha256};
+    let hash = format!("{:x}", Sha256::digest(std::fs::read(&f.source).unwrap()));
+    let inspection = inspect(&f.source).unwrap();
+    let parent = &inspection.folders[0].children[0].children[1].children[1];
+    for split in [pstoff_engine::Split::Off, pstoff_engine::Split::default()] {
+        let mut options = ConvertOptions::new(f.root.join(format!("exclude-{split:?}")), "selected".into());
+        options.split = split;
+        options.exclusions = vec![parent.id.clone()];
+        let mut events = vec![];
+        let Conversion::Complete(report) = convert(&f.source, &options, &mut |p| events.push(p), &CancelToken::default()).unwrap() else { panic!("cancelled") };
+        assert!(events.iter().all(|p| p.total == 1));
+        assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
+        assert_eq!(report.folders.iter().map(|f| f.bytes).sum::<u64>(), 100);
+        assert!(report.folders.iter().all(|f| f.folder != parent.id && f.folder != parent.children[0].id));
+        assert!(report.skipped.is_empty());
+        checked(&report.evidence.headers_only, 0);
+        checked(&report.evidence.unreadable, 0);
+        let mut output = pstoff_format::ndb::Pst::open(report.files[0].path.to_str().unwrap()).unwrap();
+        assert!(output.nodes().iter().all(|n| n.nid != parent.id.0 && n.nid != parent.children[0].id.0));
+        assert_source_hash(&f, &hash);
+    }
+    let report = split_report(run_split(&f, "exclude-all", u64::MAX, vec![inspection.folders[0].id.clone()]));
+    assert_eq!(report.folders.len(), 5);
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 0);
+    assert_source_hash(&f, &hash);
+}
+
+#[test]
+fn split_retains_populated_folder_ancestors_and_omits_empty_siblings() {
+    let mut store = source_store(vec![]);
+    store.root.children[0].children[1].children.push(Folder {
+        name: "Ancestor".into(),
+        children: vec![
+            Folder { name: "Populated".into(), items: vec![Item::new("IPM.Note", 123)], ..Default::default() },
+            Folder { name: "Empty sibling".into(), ..Default::default() },
+        ],
+        ..Default::default()
+    });
+    let f = support::Fixture::invalid();
+    let bytes = store.build();
+    std::fs::write(&f.source, &bytes).unwrap();
+    let inspection = inspect(&f.source).unwrap();
+    let ancestor = &inspection.folders[0].children[0].children[1].children[1];
+    let report = split_report(run_split(&f, "ancestors", u64::MAX, vec![]));
+    assert_eq!(report.folders.len(), 7);
+    for id in [&ancestor.id, &ancestor.children[0].id] {
+        assert!(report.folders.iter().any(|f| &f.folder == id));
+    }
+    assert!(report.folders.iter().all(|f| f.folder != ancestor.children[1].id));
+    let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let id = store.properties().make_entry_id(outlook_pst::ndb::node_id::NodeId::from(ancestor.id.0)).unwrap();
+    let actual = store.open_folder(&id).unwrap();
+    assert_eq!(actual.hierarchy_table().unwrap().rows_matrix().count(), 1);
+    assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+}
+
+#[test]
+fn invalid_split_and_unknown_exclusion_publish_nothing_and_preserve_source_hash() {
+    let (f, _, hash) = split_fixture();
+    for (base, limit, exclusions) in [
+        ("zero", 0, vec![]),
+        ("unknown-folder", u64::MAX, vec![pstoff_engine::FolderRef(0xffffffe2)]),
+    ] {
+        let error = run_split(&f, base, limit, exclusions).unwrap_err();
+        assert!(matches!(error.kind, pstoff_engine::ErrorKind::InvalidOptions));
+        assert!(error.completed_files.is_empty());
+        assert!(!f.root.join(base).exists());
+        assert_source_hash(&f, &hash);
+    }
+}
+
+#[test]
+fn later_split_name_collision_preserves_finished_parts_and_existing_file() {
+    let (f, folders, hash) = split_fixture();
+    let measured = split_report(run_split(&f, "measure", u64::MAX, vec![folders[1].clone(), folders[2].clone()]));
+    let destination = f.root.join("collision");
+    std::fs::create_dir(&destination).unwrap();
+    let held = destination.join("collision-part002.pst");
+    std::fs::write(&held, b"existing output").unwrap();
+    let error = run_split(&f, "collision", measured.files[0].bytes, vec![folders[2].clone()]).unwrap_err();
+    assert!(matches!(error.kind, pstoff_engine::ErrorKind::Collision));
+    assert_eq!(error.completed_files.len(), 1);
+    assert_eq!(std::fs::read(&held).unwrap(), b"existing output");
+    outlook_pst::open_store(&error.completed_files[0].path).unwrap();
+    assert_eq!(std::fs::read_dir(destination).unwrap().count(), 2);
+    assert_source_hash(&f, &hash);
 }
