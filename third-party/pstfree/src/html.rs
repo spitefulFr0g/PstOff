@@ -436,17 +436,37 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn decode_honours_the_declared_code_page() {
         // 日本語 in Shift-JIS and in GBK: the two a Western default turns into mojibake.
         assert_eq!(decode(b"\x93\xfa\x96\x7b\x8c\xea", Some(932)), "日本語");
         assert_eq!(decode(b"\xc8\xd5\xb1\xbe\xd3\xef", Some(936)), "日本语");
         // Κύριε in windows-1253: a single-byte page that is not 1252.
         assert_eq!(decode(b"\xca\xfd\xf1\xe9\xe5", Some(1253)), "Κύριε");
-        // A code page this machine does not have falls back rather than failing. One it
-        // does have is trusted: Windows maps even Shift-JIS's undefined bytes to
-        // something rather than refusing them, so a declaration is not second-guessed.
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn decode_unavailable_code_pages_fall_back_to_cp1252() {
+        // Off Windows there is no code-page table, so these declarations use the
+        // same CP1252 fallback as an absent declaration.
+        for (bytes, codepage) in [
+            (&b"\x93\xfa\x96\x7b\x8c\xea"[..], 932),
+            (&b"\xc8\xd5\xb1\xbe\xd3\xef"[..], 936),
+            (&b"\xca\xfd\xf1\xe9\xe5"[..], 1253),
+        ] {
+            let fallback = decode(bytes, Some(1252));
+            assert_eq!(decode(bytes, None), fallback);
+            assert_eq!(decode(bytes, Some(codepage)), fallback);
+        }
+    }
+
+    #[test]
+    fn decode_unknown_code_page_falls_back_and_utf8_takes_precedence() {
+        // A code page this machine does not have falls back rather than failing.
         assert_eq!(decode(b"caf\xe9", Some(12345)), "café");
         // UTF-8 still wins over a declaration, because declarations lie that way round.
         assert_eq!(decode("日本語".as_bytes(), Some(1252)), "日本語");
+        assert_eq!(decode("日本語".as_bytes(), Some(932)), "日本語");
     }
 }
