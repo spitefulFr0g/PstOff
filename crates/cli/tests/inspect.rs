@@ -75,7 +75,7 @@ fn inspect_rejects_non_ost_as_damaged() {
     let source = root.join("synthetic.ost");
     std::fs::write(&source, [0; 512]).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_pstoff-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_pstoff"))
         .arg("inspect")
         .arg(&source)
         .output()
@@ -91,7 +91,7 @@ fn inspect_rejects_non_ost_as_damaged() {
 
 #[test]
 fn inspect_rejects_missing_path_argument() {
-    let output = Command::new(env!("CARGO_BIN_EXE_pstoff-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_pstoff"))
         .arg("inspect")
         .output()
         .unwrap();
@@ -111,9 +111,10 @@ fn convert_unsupported_input_exits_three_without_output() {
     header[8..10].copy_from_slice(b"SO");
     header[10..12].copy_from_slice(&14u16.to_le_bytes());
     std::fs::write(&source, header).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_pstoff-cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_pstoff"))
         .arg("convert")
         .arg(&source)
+        .arg("--out")
         .arg(&output_dir)
         .output()
         .unwrap();
@@ -151,7 +152,7 @@ fn unsupported_header_variants_are_reported_by_inspect_and_rejected_by_convert()
         seal_header(&mut bytes);
         std::fs::write(&source, &bytes).unwrap();
 
-        let inspected = Command::new(env!("CARGO_BIN_EXE_pstoff-cli"))
+        let inspected = Command::new(env!("CARGO_BIN_EXE_pstoff"))
             .arg("inspect")
             .arg(&source)
             .output()
@@ -161,9 +162,10 @@ fn unsupported_header_variants_are_reported_by_inspect_and_rejected_by_convert()
         assert!(stdout.contains("Support: unsupported"), "{name}: {stdout}");
         assert!(stdout.contains(reason), "{name}: {stdout}");
 
-        let converted = Command::new(env!("CARGO_BIN_EXE_pstoff-cli"))
+        let converted = Command::new(env!("CARGO_BIN_EXE_pstoff"))
             .arg("convert")
             .arg(&source)
+            .arg("--out")
             .arg(&output_dir)
             .output()
             .unwrap();
