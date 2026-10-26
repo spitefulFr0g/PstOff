@@ -24,6 +24,7 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -75,6 +76,15 @@ def stage_input(input_dir: Path, exe: Path, fixtures: Path) -> None:
 
 def retain_output(output: Path, input_dir: Path, destination: Path) -> None:
     """Keep nested conversion artifacts and their generated comparison inputs."""
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    for parent, directories, files in os.walk(output, followlinks=False):
+        for name in (*directories, *files):
+            entry = Path(parent) / name
+            info = entry.lstat()
+            if stat.S_ISLNK(info.st_mode) or (
+                reparse_flag and getattr(info, "st_file_attributes", 0) & reparse_flag
+            ):
+                raise RuntimeError(f"Refusing to retain smoke output containing a link: {entry}")
     shutil.copytree(output, destination, dirs_exist_ok=True)
     shutil.copytree(input_dir / "fixtures", destination / "sources", dirs_exist_ok=True)
     evidence = {}

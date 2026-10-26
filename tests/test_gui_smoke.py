@@ -1,10 +1,12 @@
 import hashlib
 import importlib.util
 import json
+import stat
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -96,6 +98,30 @@ class GuiSmokeTests(unittest.TestCase):
                     gui_smoke.run(exe, fixtures, root / "out", 5)
             staging, = root.glob("PstOffGuiSmoke-run-*")
             self.assertEqual((staging / "output" / "generated.pst").read_bytes(), b"generated output")
+
+    def test_retention_rejects_links_before_copying_guest_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "output"
+            output.mkdir()
+            link = output / "host-file-link"
+            link.write_bytes(b"synthetic output")
+            source = root / "input" / "fixtures"
+            source.mkdir(parents=True)
+            destination = root / "retained"
+            original_lstat = Path.lstat
+
+            def lstat_with_link(path):
+                if path == link:
+                    return SimpleNamespace(st_mode=stat.S_IFLNK, st_file_attributes=0)
+                return original_lstat(path)
+
+            with mock.patch.object(Path, "lstat", lstat_with_link), mock.patch.object(
+                gui_smoke.shutil, "copytree"
+            ) as copytree:
+                with self.assertRaisesRegex(RuntimeError, "containing a link"):
+                    gui_smoke.retain_output(output, root / "input", destination)
+            copytree.assert_not_called()
 
     def test_refuses_to_overwrite_retained_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
