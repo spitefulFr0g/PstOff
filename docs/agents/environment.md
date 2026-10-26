@@ -32,11 +32,14 @@ The rules are in `docs/agents/safety.md`. For builds and checks on this Windows 
 
 GitHub Actions may run portable Cargo checks for the engine, CLI and format
 crates on Ubuntu, using the workspace's supported Rust version 1.89. The Linux
-lane checks formatting, Clippy and platform-independent tests. Windows-only
-conversion tests run through the local Windows Sandbox route below. Linux CI
-does not build the Windows GUI or establish Windows release acceptance; it
-also does not establish Faithful acceptance, which requires the checks in
-`docs/agents/faithful-checks.md`.
+lane checks formatting, Clippy and platform-independent tests. Engine tests
+that reach Windows disk preflight are ignored on non-Windows (but still
+compiled); CLI conversion tests are Windows-gated. Conversion/preflight tests
+remain enabled for Windows Sandbox checks. Linux CI does not build the Windows
+GUI or establish Windows conversion/GUI/release acceptance. It also does not
+establish Faithful acceptance, which requires the checks in
+`docs/agents/faithful-checks.md`. Local Windows builds and checks still use
+Windows Sandbox as described above.
 
 ## Full local check coverage
 

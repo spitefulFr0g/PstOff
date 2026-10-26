@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   portable-cargo:
-    name: Portable engine, CLI, and format tests (Ubuntu)
+    name: Portable inspection, validation, and format checks (Ubuntu)
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -28,7 +28,11 @@ jobs:
       - name: Run Clippy for portable crates
         run: cargo clippy --locked --all-targets -p pstoff-engine -p pstoff-cli -- -D warnings
 
-      # CLI conversion tests require Windows and are gated with cfg(windows).
-      # Keep engine/format tests and portable CLI inspect/argument tests on Ubuntu.
-      - name: Test engine, format, and portable CLI behavior
+      # Windows-only product: Ubuntu provides portable feedback, not conversion acceptance.
+      # Engine tests that reach disk preflight are ignored on non-Windows but still
+      # compiled by Clippy --all-targets. Preflight-independent engine rejection,
+      # foundation, reader and synthetic inspection tests remain enabled.
+      # CLI conversion tests use cfg(windows); inspect/argument tests remain enabled.
+      # Format tests run here; conversion/preflight and GUI checks require Windows Sandbox.
+      - name: Test portable inspection, validation, and format behavior
         run: cargo test --locked -p pstoff-engine -p pstoff-cli -p pstoff-format
