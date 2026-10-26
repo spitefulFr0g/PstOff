@@ -5,3 +5,6 @@ testdata/private/
 
 # Rust build output
 /target/
+
+# Local agent scratch: run notes, logs and screenshots
+/.scratch/

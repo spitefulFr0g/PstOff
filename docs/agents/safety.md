@@ -9,10 +9,10 @@ Hard rules for every agent working in this repo, including delegated ones. They 
 
 ## Third-party code
 
-- Downloaded files are untrusted. Give each download its own new directory under `/tmp`, keep your own scripts elsewhere, and never execute what you downloaded.
-- Build and test with `scripts/cargo-sandboxed` (no network, no home), from the very first build. Crate build scripts and proc macros are third-party code. The repo is mounted read-only, so run `cargo fetch` first, outside the sandbox: it downloads crates and writes `Cargo.lock` without running crate code.
-- Run any other third-party program (libpff, spike binaries) under `bwrap` the same way; `scripts/libpff-check.py` shows the pattern.
-- Windows-hosted builds have no sandbox yet. Ask the user before running one.
+- Downloaded files are untrusted. Give each download its own new directory under the Windows temp folder (`$TEMP`), keep your own scripts elsewhere, and never execute what you downloaded.
+- Build, test and run PstOff only inside **Windows Sandbox**, from the very first build. Crate build scripts and proc macros are third-party code, and so is every binary they produce. The guest has networking and the clipboard off. Source, crate cache, Rust toolchain, MSVC and the Windows SDK are mapped read-only. Only the build output folder is writable. Run `cargo fetch` on the host first: it downloads crates and writes `Cargo.lock` without running crate code. `docs/agents/environment.md` says where the route's parts live.
+- Windows runs one Sandbox at a time. Before launching one, check that none is running. A Sandbox you didn't start belongs to the user or another agent, so leave it and ask.
+- libpff is the one Linux-only tool. Run it in WSL through `scripts/libpff-check.py`, which wraps it in `bwrap`.
 
 ## SCANPST
 
@@ -26,3 +26,4 @@ Any HTTP User-Agent is `PstOff-research (https://github.com/spitefulFr0g/PstOff)
 
 - Leave the global git config alone: no `gh auth setup-git`, and the remote stays HTTPS.
 - Push with `git -c credential.helper= -c credential.helper='!gh auth git-credential' push`.
+- Push your branch after every commit. Only the pull request waits for acceptance. `scripts/unpushed` lists branches with commits no remote has, and a Claude Code Stop hook runs it at the end of each turn.
