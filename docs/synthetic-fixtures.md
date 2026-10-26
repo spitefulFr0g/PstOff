@@ -45,7 +45,7 @@ SHA-256 of the case-folded absolute worktree path. Generated OSTs stay out of Gi
 Use that directory's `/mnt/c/...` path for the independent check:
 
 ```powershell
-wsl.exe -d Debian -- python3 /mnt/c/<checkout>/scripts/check-synthetic.py /mnt/c/<output>/synthetic-23
+wsl.exe -d Debian -- python3 /mnt/c/<checkout>/scripts/libpff-check.py synthetic-check /mnt/c/<output>/synthetic-23
 ```
 
 That command uses `scripts/libpff-check.py` and its existing `bwrap` isolation.

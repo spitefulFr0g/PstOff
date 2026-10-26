@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Assert #23's generated samples with libpff under the existing bwrap wrapper.
 
-Run in WSL: python3 scripts/check-synthetic.py /mnt/c/.../output-v2/synthetic-23
+Run in WSL: python3 scripts/libpff-check.py synthetic-check /mnt/c/.../output-v2/synthetic-23
 Generate first with sandbox-cargo.py test -p pstoff-engine --test synthetic
 export_for_libpff -- --ignored. This checks synthetic inputs, not Faithful output.
 """
@@ -9,7 +9,8 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import runpy
+import subprocess
+import sys
 
 
 def digest(raw):
@@ -29,8 +30,7 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def check(directory):
-    sandboxed = runpy.run_path(str(Path(__file__).with_name('libpff-check.py')))['sandboxed']
+def check(directory, sandboxed):
     inventories = {}
     for name in ('tree', 'rich', 'unreadable-item', 'unreadable-folder'):
         inventories[name] = json.loads(sandboxed('synthetic_probe.py', directory / (name + '.ost')))
@@ -103,4 +103,8 @@ def check(directory):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory', type=Path)
-    check(parser.parse_args().directory)
+    # Retain the old command as a shim; all reader execution enters the wrapper.
+    raise SystemExit(subprocess.run([
+        sys.executable, str(Path(__file__).with_name('libpff-check.py')),
+        'synthetic-check', str(parser.parse_args().directory),
+    ]).returncode)

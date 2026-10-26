@@ -366,6 +366,7 @@ def run_wrapper(
                     [sys.executable, str(root / "scripts" / "audit-dependencies.py")],
                     input=metadata.read_text(encoding="utf-8", errors="replace"),
                     text=True,
+                    encoding="utf-8",
                     cwd=root,
                 )
                 if audit.returncode:
@@ -390,6 +391,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Guest logs and metadata use UTF-8 even when host Python defaults to cp1252.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     try:
         raise SystemExit(main(sys.argv[1:]))
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:

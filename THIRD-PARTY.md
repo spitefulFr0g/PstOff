@@ -17,9 +17,8 @@ Cargo.lock is the authoritative transitive version/checksum list. Packaging
 must retain dependency license texts alongside executable distributions;
 this foundation does not produce a release bundle. All resolved package
 license expressions must remain MIT-compatible. No GPL/LGPL dependency is
-approved. GPUI is intentionally deferred to the Windows feasibility/license
-audit, and must not enter Linux builds. CI checkout action is pinned to
-11bd71901bbe5b1630ceea73d27597364c9af683 (v4.2.2).
+approved. The `gpui-pre` 0.3.9 snapshot and Windows dependency graph are recorded in `docs/gui-dependency-audit.md`. Cargo builds and checks run in Windows Sandbox through the repository wrappers;
+WSL is reserved for the isolated libpff reader.
 
 The resolved graph was audited using sandboxed `cargo metadata --locked`.
 `scripts/check` enforces the reviewed license expressions and Microsoft pin.

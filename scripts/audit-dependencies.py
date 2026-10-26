@@ -19,7 +19,8 @@ APPROVED = {
     "CC0-1.0 OR MIT-0 OR Apache-2.0", "MIT OR Apache-2.0 OR Zlib",
     "Unicode-3.0", "Zlib", "Zlib OR Apache-2.0 OR MIT",
 }
-metadata = json.load(sys.stdin)
+# Cargo emits UTF-8 JSON regardless of the Windows host's active code page.
+metadata = json.load(sys.stdin.buffer)
 errors = []
 for package in metadata["packages"]:
     if package.get("license") not in APPROVED:
