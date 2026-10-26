@@ -11,10 +11,14 @@ pub(super) fn prepare(
     source: &mut Pst,
     nodes: &[Node],
     differences: &mut Vec<Difference>,
-) -> Result<BTreeMap<u32, Properties>> {
+    cancel: &crate::CancelToken,
+) -> Result<Option<BTreeMap<u32, Properties>>> {
     let mut planned = BTreeMap::new();
     let mut observations: BTreeMap<u32, Vec<(u32, bool, bool, Properties)>> = BTreeMap::new();
     for node in nodes.iter().filter(|n| matches!(n.nid & 31, 0x0e..=0x10)) {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
         let table = table::read(source, node.bid_data, node.bid_sub)?;
         for (nid, _, cells) in table.rows {
             let item = nodes
@@ -36,6 +40,9 @@ pub(super) fn prepare(
         }
     }
     for node in nodes.iter().filter(|n| matches!(n.nid & 31, 4 | 8)) {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
         let mut own = context::properties(source, node.bid_data, node.bid_sub)?;
         if let std::collections::btree_map::Entry::Vacant(entry) = own.entry(0x3008) {
             if let Some(all) = observations.get(&node.nid) {
@@ -121,7 +128,7 @@ pub(super) fn prepare(
         }
         planned.insert(node.nid, own);
     }
-    Ok(planned)
+    Ok(Some(planned))
 }
 
 // MS-OXCFXICS 2.2.2.2/2.2.2.3: bounded XIDs, strictly sorted namespaces,

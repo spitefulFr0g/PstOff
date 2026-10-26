@@ -6,6 +6,10 @@ use pstoff_engine::{convert, inspect, CancelToken, Conversion, ConvertOptions};
 use synthetic::{Folder, Item, Store};
 
 fn source() -> Vec<u8> {
+    source_items(vec![Item::new("IPM.Note", 1234)])
+}
+
+fn source_items(items: Vec<Item>) -> Vec<u8> {
     Store {
         root: Folder {
             name: "Root".into(),
@@ -18,7 +22,7 @@ fn source() -> Vec<u8> {
                     },
                     Folder {
                         name: "IPM_SUBTREE".into(),
-                        items: vec![Item::new("IPM.Note", 1234)],
+                        items,
                         children: vec![Folder {
                             name: "Deleted Items".into(),
                             ..Default::default()
@@ -165,9 +169,11 @@ fn a_destination_created_during_conversion_is_preserved_and_reports_are_rolled_b
     let error = convert(
         &f.source,
         &options,
-        &mut |_| {
-            assert!(!final_path.exists());
-            std::fs::write(&final_path, b"other caller").unwrap();
+        &mut |p: pstoff_engine::Progress| {
+            if p.fraction == 0.95 {
+                assert!(!final_path.exists());
+                std::fs::write(&final_path, b"other caller").unwrap();
+            }
         },
         &CancelToken::default(),
     )
@@ -175,4 +181,52 @@ fn a_destination_created_during_conversion_is_preserved_and_reports_are_rolled_b
     assert!(matches!(error.kind, pstoff_engine::ErrorKind::Collision));
     assert_eq!(std::fs::read(&final_path).unwrap(), b"other caller");
     assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 1);
+}
+
+#[test]
+fn cancellation_between_items_reports_progress_and_removes_partial_output() {
+    let f = support::Fixture::invalid();
+    let mut item = Item::new("IPM.Note", 100);
+    item.properties
+        .push(synthetic::Property::binary(0x6800, vec![0x42; 20000]));
+    let bytes = source_items(vec![
+        item,
+        Item::new("IPM.Contact", 200),
+        Item::new("IPM.Task", 300),
+    ]);
+    std::fs::write(&f.source, &bytes).unwrap();
+    let inspection = inspect(&f.source).unwrap();
+    let folder = inspection.folders[0].children[0]
+        .children
+        .iter()
+        .find(|f| f.item_count == 3)
+        .unwrap()
+        .id
+        .clone();
+    let options = ConvertOptions::new(f.root.join("out"), "cancelled".into());
+    let token = CancelToken::default();
+    let mut events = vec![];
+    let result = convert(
+        &f.source,
+        &options,
+        &mut |p: pstoff_engine::Progress| {
+            assert!(!options.destination.join("cancelled.pst").exists());
+            if p.done == 1 {
+                assert_eq!(p.current_folder, Some(folder.clone()));
+                assert_eq!(p.total, 3);
+                assert!(p.fraction > 0.0 && p.fraction < 0.95);
+                // Cancellation occurs after one whole Item, before the next Item.
+                token.cancel();
+            }
+            events.push(p);
+        },
+        &token,
+    )
+    .unwrap();
+    assert!(
+        matches!(result, Conversion::Cancelled { completed_files } if completed_files.is_empty())
+    );
+    assert_eq!(events.last().unwrap().done, 1);
+    assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 0);
+    assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
 }

@@ -347,9 +347,28 @@ pub(super) fn write(
     nodes: &[Node],
     path: &Path,
     display: &str,
-) -> Result<Vec<crate::Difference>> {
+    progress: &mut dyn crate::ProgressSink,
+    cancel: &crate::CancelToken,
+) -> Result<Option<Vec<crate::Difference>>> {
+    let total = nodes
+        .iter()
+        .filter(|n| matches!(n.nid_type(), 4 | 8))
+        .count() as u64;
+    let mut done = 0;
+    progress.update(crate::Progress {
+        fraction: 0.0,
+        current_folder: None,
+        done,
+        total,
+        part: 1,
+    });
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
     let (store_cells, mut differences) = store::prepare(source, nodes, display)?;
-    let planned = cache::prepare(source, nodes, &mut differences)?;
+    let Some(planned) = cache::prepare(source, nodes, &mut differences, cancel)? else {
+        return Ok(None);
+    };
     let file = std::fs::OpenOptions::new()
         .write(true)
         .read(true)
@@ -368,6 +387,9 @@ pub(super) fn write(
     };
     let mut entries = Vec::new();
     for node in nodes {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
         let override_cells = if node.nid == 0x21 {
             Some(store_cells.clone())
         } else {
@@ -387,6 +409,19 @@ pub(super) fn write(
         p64(&mut entry, 16, sub);
         p32(&mut entry, 24, node.nid_parent);
         entries.push((node.nid as u64, entry));
+        if matches!(node.nid_type(), 4 | 8) {
+            done += 1;
+            progress.update(crate::Progress {
+                fraction: 0.9 * done as f64 / total.max(1) as f64,
+                current_folder: Some(crate::FolderRef(node.nid_parent)),
+                done,
+                total,
+                part: 1,
+            });
+        }
+    }
+    if cancel.is_cancelled() {
+        return Ok(None);
     }
     entries.sort_by_key(|e| e.0);
     let nbt = out.tree(entries, 0x81, 32)?;
@@ -441,5 +476,5 @@ pub(super) fn write(
     let mut pst = UnicodePstFile::open(path)?;
     pst.lock()?.flush()?;
     partial.keep = true;
-    Ok(differences)
+    Ok(Some(differences))
 }

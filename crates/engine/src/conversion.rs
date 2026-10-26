@@ -83,8 +83,18 @@ pub(super) fn convert(
     };
     let temporary = staging.join("output.pst");
     let display = path.file_stem().unwrap_or_default().to_string_lossy();
-    let differences = writer::write(&mut source, &nodes, &temporary, &display)
-        .map_err(|e| failure(ErrorKind::Io, e.to_string()))?;
+    let total = nodes
+        .iter()
+        .filter(|n| matches!(n.nid_type(), 4 | 8))
+        .count() as u64;
+    let Some(differences) =
+        writer::write(&mut source, &nodes, &temporary, &display, progress, cancel)
+            .map_err(|e| failure(ErrorKind::Io, e.to_string()))?
+    else {
+        return Ok(Conversion::Cancelled {
+            completed_files: vec![],
+        });
+    };
     // The writer has closed and flushed the PST before it can receive its final name.
     let bytes = fs::metadata(&temporary)
         .map_err(|e| failure(ErrorKind::Io, e.to_string()))?
@@ -99,8 +109,8 @@ pub(super) fn convert(
     progress.update(Progress {
         fraction: 0.95,
         current_folder: None,
-        done: 0,
-        total: 0,
+        done: total,
+        total,
         part: 1,
     });
     if cancel.is_cancelled() {
@@ -146,8 +156,8 @@ pub(super) fn convert(
     progress.update(Progress {
         fraction: 1.0,
         current_folder: None,
-        done: 0,
-        total: 0,
+        done: total,
+        total,
         part: 1,
     });
     Ok(Conversion::Complete(Box::new(report)))
