@@ -1,0 +1,37 @@
+{
+  "verdict": "PASS",
+  "reader_version": "20180714",
+  "samples": {
+    "tree": {
+      "size": 18432,
+      "sha256": "9623cf024c613c3103d0ac33f636b782b5ed48c64c3f2abc1570bd9c04fd9b3d"
+    },
+    "rich": {
+      "size": 116736,
+      "sha256": "abc15d6efea5bd1a2f418df41046a860e30bd9737bed3ffafe36d56f45d2ad89"
+    },
+    "unreadable-item": {
+      "size": 18432,
+      "sha256": "eedfd307b69c7817ccb1e60d8aa194d9de247d083b396cdab5c53017db3a5604"
+    },
+    "unreadable-folder": {
+      "size": 18432,
+      "sha256": "67a088802573184f7258ff648a5d8711dd13a9f111bf27b29fe57625010875b9"
+    }
+  },
+  "healthy_samples": 2,
+  "independent_read_failures": 2,
+  "coverage": [
+    "tree",
+    "sizes",
+    "six Item classes",
+    "multi-page heap",
+    "body stream",
+    "attachment stream",
+    "recipients",
+    "embedded Item",
+    "HeaderItem",
+    "external reference",
+    "Q12/Q15 cached cells"
+  ]
+}
