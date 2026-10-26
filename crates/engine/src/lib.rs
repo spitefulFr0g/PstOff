@@ -1,5 +1,6 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
+mod planner;
 mod reader;
 mod writer;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use std::sync::{
 };
 
 pub const DEFAULT_SPLIT_BYTES: u64 = 21_474_836_480;
-pub const REPORT_SCHEMA_VERSION: u32 = 1;
+pub const REPORT_SCHEMA_VERSION: u32 = 2;
 /// An OST records cached contents, not the server mailbox's full history.
 pub const MAILBOX_COMPLETENESS_STATEMENT: &str = "Mailbox completeness: unknown. An OST holds only what Outlook synced. Items or folders that were never synced cannot be recovered from this file.";
 
@@ -66,6 +67,12 @@ pub struct ConvertOptions {
     pub base_name: String,
     pub exclusions: Vec<FolderRef>,
     pub split: Split,
+    /// Extra destination headroom in addition to the estimated PST size.
+    #[serde(default = "default_space_reserve")]
+    pub space_reserve_bytes: u64,
+}
+fn default_space_reserve() -> u64 {
+    64 * 1024 * 1024
 }
 impl ConvertOptions {
     pub fn new(destination: PathBuf, base_name: String) -> Self {
@@ -74,6 +81,7 @@ impl ConvertOptions {
             base_name,
             exclusions: Vec::new(),
             split: Split::default(),
+            space_reserve_bytes: default_space_reserve(),
         }
     }
 }
@@ -123,7 +131,14 @@ pub enum LocalRef {
     Item(ItemRef),
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SkipReason {
+    UnreadableItem,
+    UnreadableFolder,
+    UnreadableAncestor,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skipped {
+    pub code: SkipReason,
     pub reference: LocalRef,
     pub reason: String,
 }
@@ -137,6 +152,12 @@ pub struct Difference {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Evidence {
     NotChecked,
+    /// Positive findings remain useful, but damaged Items were not checked.
+    Incomplete {
+        count: u64,
+        references: Vec<ItemRef>,
+        unchecked: Vec<ItemRef>,
+    },
     Checked {
         count: u64,
         references: Vec<ItemRef>,

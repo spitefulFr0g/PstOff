@@ -18,7 +18,7 @@ EXIT_SANDBOX_RUNNING = 3
 EXIT_CANNOT_RUN = 2
 DEFAULT_TIMEOUT_SECONDS = 60 * 60
 CHECK_COMMANDS = (
-    ("metadata", "--locked", "--format-version", "1"),
+    ("metadata", "--locked", "--format-version", "1", "--filter-platform", "x86_64-pc-windows-msvc"),
     ("fmt", "-p", "pstoff-engine", "-p", "pstoff-cli", "-p", "pstoff-gui", "--", "--check"),
     ("clippy", "--locked", "-p", "pstoff-engine", "-p", "pstoff-cli", "-p", "pstoff-gui", "--all-targets", "--", "-D", "warnings"),
     ("test", "--locked", "-p", "pstoff-engine", "-p", "pstoff-cli", "-p", "pstoff-gui"),

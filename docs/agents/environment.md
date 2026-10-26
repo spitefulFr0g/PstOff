@@ -26,4 +26,18 @@ The rules are in `docs/agents/safety.md`. Run Cargo through `python scripts/sand
 
 - Rust stable MSVC, installed inside a guest and mapped read-only: `%TEMP%\PstOffRustInstall-8zzvegc3\install`.
 - MSVC from Visual Studio 2022 Community (14.44.35207) and Windows SDK 10.0.26100.0, mapped read-only from their install folders.
-- The wrapper uses MSVC 14.44.35207 and SDK 10.0.26100.0 from those paths. GUI launches and screenshot smoke runs stay in #37.
+- The wrapper uses MSVC 14.44.35207 and SDK 10.0.26100.0 from those paths.
+
+## GUI smoke run
+
+The GUI is never launched on the host. `python scripts/gui-smoke.py` boots a second, clean Windows Sandbox that maps only the built `.exe`, generated OSTs and `scripts/gui-smoke-guest.ps1` read-only, plus one writable output folder: no checkout, crate cache or toolchain. Networking and the clipboard are off. The guest script launches the wizard on the fixtures, clicks through it with the guest's own mouse, screenshots each screen, closes the window and records its exit code. It shares the cargo wrapper's host lock and refuses to start while another Sandbox runs.
+
+1. Build a self-contained release `.exe` (static CRT, so a clean guest needs no VC runtime):
+   ```
+   python scripts/sandbox-cargo.py build --release --locked -p pstoff-gui --config "target.x86_64-pc-windows-msvc.rustflags=['-C','target-feature=+crt-static']"
+   ```
+2. Write the smoke fixtures into the wrapper's target folder:
+   ```
+   python scripts/sandbox-cargo.py test --locked -p pstoff-gui --test smoke_fixtures -- --ignored
+   ```
+3. `python scripts/gui-smoke.py`. Screenshots and `smoke.log` land in `.scratch/gui-smoke/<time>/`, or `--out <dir>`.

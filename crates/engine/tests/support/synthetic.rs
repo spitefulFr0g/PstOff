@@ -11,6 +11,7 @@ pub struct Folder {
     pub items: Vec<Item>,
     pub children: Vec<Folder>,
     pub unreadable: bool,
+    pub unreadable_table: bool,
 }
 #[derive(Default)]
 pub struct Item {
@@ -18,6 +19,7 @@ pub struct Item {
     pub size: u32,
     pub properties: Vec<Property>,
     pub recipients: Vec<Recipient>,
+    pub recipient_row_ids: Vec<u32>,
     pub attachments: Vec<Attachment>,
     pub headers_only: bool,
     pub cached: Vec<Property>,
@@ -82,6 +84,13 @@ pub enum Attachment {
 type Subnodes = BTreeMap<u32, (u64, u64)>;
 impl Store {
     pub fn build(&self) -> Vec<u8> {
+        self.build_with_header_identity(
+            0,
+            [8, 0x20, 6, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+            0x8578,
+        )
+    }
+    pub fn build_with_header_identity(&self, index: u16, guid: [u8; 16], lid: u32) -> Vec<u8> {
         let mut w = Writer::default();
         w.node(
             0x21,
@@ -93,16 +102,14 @@ impl Store {
         );
         // PidLidHeaderItem: PSETID_Common, LID 0x8578, mapped to 0x8000.
         let mut entry = vec![0; 8];
-        p32(&mut entry, 0, 0x8578);
+        p32(&mut entry, 0, lid);
+        p16(&mut entry, 6, index);
         p16(&mut entry, 4, 6); // GUID stream index 3, MNID_ID.
         w.node(
             0x61,
             0,
             &[
-                Property::binary(
-                    2,
-                    vec![8, 0x20, 6, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46],
-                ),
+                Property::binary(2, guid.to_vec()),
                 Property::binary(3, entry),
                 Property::binary(4, vec![0; 4]),
             ],
@@ -311,7 +318,7 @@ impl Writer {
                 .enumerate()
                 .map(|(i, r)| {
                     (
-                        i as u32,
+                        item.recipient_row_ids.get(i).copied().unwrap_or(i as u32),
                         vec![
                             Property::int(0x0c15, r.kind),
                             Property::text(0x3001, &r.name),
@@ -335,8 +342,9 @@ impl Writer {
                     ap.push(Property::binary(0x3701, bytes.clone()));
                 }
                 Attachment::External(url) => {
-                    ap.push(Property::int(0x3705, 2));
-                    ap.push(Property::text(0x370d, url));
+                    ap.retain(|p| p.id != 0x3707);
+                    ap.push(Property::int(0x3705, 7));
+                    ap.push(Property::text(0x3707, url));
                 }
                 Attachment::Embedded(inner) => {
                     ap.push(Property::int(0x3705, 5));
@@ -396,6 +404,9 @@ impl Writer {
             .collect();
         for (kind, rows) in [(0xd, &children), (0xe, &items), (0xf, &vec![])] {
             let data = self.table(rows);
+            if folder.unreadable_table && kind == 0xe {
+                self.unreadable(data);
+            }
             self.nodes.insert((nid & !31) | kind, (0, data, 0));
         }
         nid

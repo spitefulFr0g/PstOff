@@ -12,6 +12,7 @@ pub(super) fn prepare(
     source: &mut Pst,
     nodes: &[Node],
     display: &str,
+    created: &std::collections::BTreeMap<u32, String>,
 ) -> Result<(Properties, Vec<Difference>)> {
     let node = nodes
         .iter()
@@ -26,8 +27,15 @@ pub(super) fn prepare(
         .clone();
     let mut names = vec![];
     for n in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
-        let pc = ltp::read_node_pc(source, n)?;
-        names.push((n.nid, n.nid_parent, pc.str(0x3001).unwrap_or("").to_owned()));
+        let name = if let Some(name) = created.get(&n.nid) {
+            name.clone()
+        } else {
+            ltp::read_node_pc(source, n)?
+                .str(0x3001)
+                .unwrap_or("")
+                .to_owned()
+        };
+        names.push((n.nid, n.nid_parent, name));
     }
     let child = |parent: u32, name: &str| -> Result<u32> {
         let found: Vec<_> = names
