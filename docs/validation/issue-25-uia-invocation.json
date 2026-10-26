@@ -1,0 +1,130 @@
+{
+  "issue": 25,
+  "date": "2026-10-26",
+  "base_commit": "c35d3c1eda8fd26e9514eb4b860501fc702427ec",
+  "scope": "Only temporary copies of the authorized Empty control were opened. No candidate or private mail opened. No Faithful verdict.",
+  "final_change": "Resolve the named Backstage Group to its unique enabled Button/MenuItem before using existing UIA patterns. All original verdict checks retained.",
+  "tests": {
+    "command": "python -m unittest discover -s tests -p test_outlook_check.py -v",
+    "passed": 24,
+    "regression_against_base": "FAIL with the exact original invocation error (expected); final regression PASS"
+  },
+  "hashes": {
+    "empty_before_and_after": "e5afce94f40d9475731baa8b08ad762bff28b1227adfa39db09f712098a0b873",
+    "candidate_handoff_prefix": "b95b7e79",
+    "candidate_before": "a978df1810157cfb802b6fb5fd2fa11832bc4db9f72361334ed277b387e1aafd",
+    "candidate_after": "bc222d0fa8a953c2d05bcdb06c8c379cb95989607ccc710ec9c6d492533e4942",
+    "expected_issue_17_abbreviated": "1a0919f5\u2026bb7b"
+  },
+  "candidate": {
+    "status": "NOT RUN",
+    "reason": "Source identity differed from the handoff and changed again during this task; no authorization response received for the changed identity. Substitute only, never exact #17 validation."
+  },
+  "blocker": "File dialog was observed after the command fix, but its filename field exposes Pane with no ValuePattern and rejects SetFocus. Office sign-in setup prompt also observed; no authentication dialog was automated. Cause of unavailable field is not established.",
+  "cleanup": "All runs that launched Outlook reported CopyRemoved=true and InputUnchanged=true for Empty. No Outlook process remained at final inspection.",
+  "live_runs": [
+    {
+      "run": "empty-baseline.json",
+      "input": "Empty control",
+      "exit_code": 2,
+      "note": "Unedited c35d3c1: original invocation failure reproduced.",
+      "result": {
+        "gate": "ERROR",
+        "Profile": "PstOffValidation",
+        "problems": [
+          "DriverError: Element 'Open Outlook Data File...' can't be invoked\nAt C:\\Users\\spitefulfr0g\\.t3\\worktrees\\PstOff\\t3-170be29a\\scripts\\outlook-check.ps1:76 char:3\n+   throw \"Element '$($Element.Current.Name)' can't be invoked\"\n+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Element 'Open O...an't be invoked:String) [], RuntimeException\n    + FullyQualifiedErrorId : Element 'Open Outlook Data File...' can't be invoked"
+        ],
+        "CopyRemoved": true,
+        "InputUnchanged": true
+      }
+    },
+    {
+      "run": "empty-after-1.json",
+      "input": "Empty control",
+      "exit_code": 2,
+      "note": "Exploratory ancestor/focus fallback: diagnostic identified a non-focusable Group.",
+      "result": {
+        "gate": "ERROR",
+        "Profile": "PstOffValidation",
+        "problems": [
+          "DriverError: Element 'Open Outlook Data File...' (ControlType.Group, focusable=False) can't be invoked\nAt C:\\Users\\spitefulfr0g\\.t3\\worktrees\\PstOff\\t3-170be29a\\scripts\\outlook-check.ps1:94 char:3\n+   throw \"Element '$($Element.Current.Name)' ($($Element.Current.Contr ...\n+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Element 'Open O...an't be invoked:String) [], RuntimeException\n    + FullyQualifiedErrorId : Element 'Open Outlook Data File...' (ControlType.Group, focusable=False) can't be invoke \n   d"
+        ],
+        "CopyRemoved": true,
+        "InputUnchanged": true
+      }
+    },
+    {
+      "run": "empty-after-2.json",
+      "input": "Empty control",
+      "exit_code": 2,
+      "note": "Group command fix opens the dialog; existing Edit lookup times out.",
+      "result": {
+        "gate": "ERROR",
+        "Profile": "PstOffValidation",
+        "problems": [
+          "DriverError: Timed out waiting for the Open Outlook Data File dialog\nAt C:\\Users\\spitefulfr0g\\.t3\\worktrees\\PstOff\\t3-170be29a\\scripts\\outlook-check.ps1:33 char:3\n+   throw \"Timed out waiting for $What\"\n+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Timed out waiti...ata File dialog:String) [], RuntimeException\n    + FullyQualifiedErrorId : Timed out waiting for the Open Outlook Data File dialog"
+        ],
+        "CopyRemoved": true,
+        "InputUnchanged": true
+      }
+    },
+    {
+      "run": "empty-after-3.json",
+      "input": "Empty control",
+      "exit_code": 2,
+      "note": "Same group command fix with temporary diagnostic capture; Edit lookup times out.",
+      "result": {
+        "gate": "ERROR",
+        "Profile": "PstOffValidation",
+        "problems": [
+          "DriverError: Timed out waiting for the Open Outlook Data File dialog\nAt C:\\Users\\spitefulfr0g\\.t3\\worktrees\\PstOff\\t3-170be29a\\scripts\\outlook-check.ps1:33 char:3\n+   throw \"Timed out waiting for $What\"\n+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Timed out waiti...ata File dialog:String) [], RuntimeException\n    + FullyQualifiedErrorId : Timed out waiting for the Open Outlook Data File dialog"
+        ],
+        "CopyRemoved": true,
+        "InputUnchanged": true
+      }
+    },
+    {
+      "run": "empty-after-4.json",
+      "input": "Empty control",
+      "exit_code": 2,
+      "note": "Attempt refused while preceding validation process was still open; nothing launched.",
+      "result": {
+        "gate": "ERROR",
+        "Profile": "PstOffValidation",
+        "problems": [
+          "Outlook is already open; close it first"
+        ]
+      }
+    },
+    {
+      "run": "empty-after-5.json",
+      "input": "Empty control",
+      "exit_code": 2,
+      "note": "Exploratory Win32-class lookup finds filename field; no ValuePattern. Not retained.",
+      "result": {
+        "gate": "ERROR",
+        "Profile": "PstOffValidation",
+        "problems": [
+          "DriverError: C:\\Users\\spitefulfr0g\\.t3\\worktrees\\PstOff\\t3-170be29a\\scripts\\outlook-check.ps1 : You cannot call a method on a \nnull-valued expression.\n    + CategoryInfo          : InvalidOperation: (:) [outlook-check.ps1], RuntimeException\n    + FullyQualifiedErrorId : InvokeMethodOnNull,outlook-check.ps1"
+        ],
+        "CopyRemoved": true,
+        "InputUnchanged": true
+      }
+    },
+    {
+      "run": "empty-after-6.json",
+      "input": "Empty control",
+      "exit_code": 2,
+      "note": "Exploratory keyboard fallback: SetFocus rejected. Not retained; UI attempts stopped.",
+      "result": {
+        "gate": "ERROR",
+        "Profile": "PstOffValidation",
+        "problems": [
+          "DriverError: C:\\Users\\spitefulfr0g\\.t3\\worktrees\\PstOff\\t3-170be29a\\scripts\\outlook-check.ps1 : Exception calling \"SetFocus\" with \n\"0\" argument(s): \"Target element cannot receive focus.\"\n    + CategoryInfo          : NotSpecified: (:) [outlook-check.ps1], MethodInvocationException\n    + FullyQualifiedErrorId : InvalidOperationException,outlook-check.ps1"
+        ],
+        "CopyRemoved": true,
+        "InputUnchanged": true
+      }
+    }
+  ]
+}

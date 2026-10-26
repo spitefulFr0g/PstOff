@@ -67,6 +67,14 @@ function Get-Pattern($Element, $Pattern) {
 }
 
 function Invoke-Element($Element) {
+  # Backstage labels a Group with the command name and puts the actual button inside.
+  # Require an unambiguous enabled command; the caller still verifies that the dialog opens.
+  if ($Element.Current.ControlType -eq $CT::Group) {
+    $commands = @($Element.FindAll($Scope::Descendants, [Windows.Automation.Condition]::TrueCondition) |
+      Where-Object { $_.Current.ControlType -in @($CT::Button, $CT::MenuItem) -and $_.Current.IsEnabled })
+    if ($commands.Count -ne 1) { throw "Expected one actionable control in the Outlook command group, found $($commands.Count)" }
+    $Element = $commands[0]
+  }
   $invoke = Get-Pattern $Element ([Windows.Automation.InvokePattern]::Pattern)
   if ($invoke) { $invoke.Invoke(); return }
   $select = Get-Pattern $Element ([Windows.Automation.SelectionItemPattern]::Pattern)

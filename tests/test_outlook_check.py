@@ -1,4 +1,6 @@
 import importlib.util
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -245,6 +247,50 @@ class DriverScriptTests(unittest.TestCase):
     def test_driver_attaches_only_to_the_launched_process(self):
         self.assertIn("[Parameter(Mandatory=$true)][int]$ProcessId", self.text)
         self.assertIn("ProcessIdProperty", self.text)
+
+    @unittest.skipUnless(os.name == "nt", "Windows UIAutomation assemblies required")
+    def test_backstage_group_invokes_its_button_and_rejects_ambiguous_groups(self):
+        # Execute the real function with fake elements, without launching or driving Outlook.
+        script = r'''
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$CT = [Windows.Automation.ControlType]
+$Scope = [Windows.Automation.TreeScope]
+$tokens = $null; $errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Driver parse failed' }
+$function = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Element' }, $true)
+Invoke-Expression $function.Extent.Text
+$script:invocations = 0
+$action = New-Object psobject
+$action | Add-Member ScriptMethod Invoke { $script:invocations++ }
+function Get-Pattern($Element, $Pattern) {
+  if ($Pattern -eq [Windows.Automation.InvokePattern]::Pattern -and $Element.Current.ControlType -eq $CT::Button) { return $action }
+}
+$button = [pscustomobject]@{ Current = [pscustomobject]@{ ControlType = $CT::Button; IsEnabled = $true } }
+$group = [pscustomobject]@{ Current = [pscustomobject]@{ ControlType = $CT::Group; Name = 'Open Outlook Data File...' }; Commands = @($button) }
+$group | Add-Member ScriptMethod FindAll { param($Scope, $Condition) return $this.Commands }
+Invoke-Element $group
+if ($script:invocations -ne 1) { throw 'Backstage button was not invoked' }
+foreach ($commands in @(@(), @($button, $button))) {
+  $group.Commands = $commands
+  $refused = $false
+  try { Invoke-Element $group } catch {
+    if ($_.Exception.Message -notlike 'Expected one actionable control*') { throw }
+    $refused = $true
+  }
+  if (-not $refused) { throw 'Ambiguous command group was accepted' }
+}
+if ($script:invocations -ne 1) { throw 'Ambiguous group invoked a button' }
+'''
+        with tempfile.TemporaryDirectory() as temp:
+            harness = Path(temp) / "test-driver.ps1"
+            harness.write_text(script, encoding="utf-8")
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(harness),
+                 str(SCRIPT.with_suffix(".ps1"))], capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
 
 if __name__ == "__main__":
