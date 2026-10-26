@@ -147,13 +147,9 @@ impl Output {
         b[0] = 1;
         b[1] = level;
         p16(&mut b, 2, parts.len() as u16);
-        // Data-tree offsets use full non-final block slots, even when a heap
-        // page is short. The final block contributes its actual byte length.
-        let total = if level == 1 {
-            (parts.len() as u64 - 1) * MAX as u64 + parts.last().unwrap().1
-        } else {
-            parts.iter().map(|p| p.1).sum()
-        };
+        // cbTotal is the sum of the logical bytes below this XBLOCK, not
+        // full-sized slots. Heap pages may be short before the final page.
+        let total: u64 = parts.iter().map(|p| p.1).sum();
         p32(&mut b, 4, u32::try_from(total)?);
         for (i, p) in parts.iter().enumerate() {
             p64(&mut b, 8 + i * 8, p.0);

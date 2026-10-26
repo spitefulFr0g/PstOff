@@ -230,3 +230,89 @@ fn cancellation_between_items_reports_progress_and_removes_partial_output() {
     assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 0);
     assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
 }
+
+#[test]
+fn all_item_classes_and_short_non_final_streams_round_trip_with_valid_totals() {
+    use outlook_pst::ltp::prop_context::PropertyValue;
+    use pstoff_format::ndb::Pst;
+    let f = support::Fixture::invalid();
+    let classes = [
+        "IPM.Note",
+        "IPM.Appointment",
+        "IPM.Contact",
+        "IPM.Task",
+        "IPM.StickyNote",
+        "IPM.Activity",
+    ];
+    // A heap-signature payload with short non-final source blocks exercises
+    // relocation without relying on the writer's heap allocation strategy.
+    let mut payload = vec![0x23; 9000];
+    payload[2] = 0xec;
+    payload[3] = 0x6c;
+    let items = classes
+        .iter()
+        .map(|class| {
+            let mut item = Item::new(class, 9000);
+            item.properties
+                .push(synthetic::Property::binary(0x6800, payload.clone()));
+            item
+        })
+        .collect();
+    let bytes = source_items(items);
+    std::fs::write(&f.source, &bytes).unwrap();
+    let options = ConvertOptions::new(f.root.join("out"), "classes".into());
+    let Conversion::Complete(report) =
+        convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+    else {
+        panic!("cancelled")
+    };
+    let mut output = Pst::open(report.files[0].path.to_str().unwrap()).unwrap();
+    let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let mut actual = vec![];
+    for item in output.nodes().into_iter().filter(|n| n.nid_type() == 4) {
+        let id = store
+            .properties()
+            .make_entry_id(outlook_pst::ndb::node_id::NodeId::from(item.nid))
+            .unwrap();
+        let message = store.open_message(&id, None).unwrap();
+        actual.push(message.properties().message_class().unwrap());
+        let Some(PropertyValue::Binary(value)) = message.properties().get(0x6800) else {
+            panic!("missing binary payload")
+        };
+        assert_eq!(value.buffer(), payload);
+    }
+    actual.sort();
+    let mut expected = classes.map(str::to_string);
+    expected.sort();
+    assert_eq!(actual, expected);
+    // Validate the serialized MS-PST data-tree length invariant. Both bundled
+    // readers tolerate incorrect cbTotal, so property read-back alone misses it.
+    let mut short_non_final = 0;
+    for block in output.blocks() {
+        if block.bid & 2 == 0 {
+            continue;
+        }
+        let data = output.block(block.bid).unwrap();
+        if data.get(..2) != Some(&[1, 1]) {
+            continue;
+        }
+        let count = u16::from_le_bytes(data[2..4].try_into().unwrap()) as usize;
+        let mut total = 0;
+        for (i, entry) in data[8..8 + count * 8].chunks_exact(8).enumerate() {
+            let child = u64::from_le_bytes(entry.try_into().unwrap());
+            let length = output.block(child).unwrap().len();
+            if i + 1 < count && length < 8176 {
+                short_non_final += 1;
+            }
+            total += length as u32;
+        }
+        assert_eq!(
+            u32::from_le_bytes(data[4..8].try_into().unwrap()),
+            total,
+            "XBLOCK cbTotal must cover actual child bytes"
+        );
+    }
+    assert!(short_non_final >= 6);
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 6);
+    assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+}
