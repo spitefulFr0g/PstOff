@@ -6,7 +6,10 @@ use pstoff_format::{
 };
 use std::collections::HashSet;
 
-pub(crate) fn excluded(nodes: &[Node], requested: &[FolderRef]) -> Result<HashSet<u32>, EngineError> {
+pub(crate) fn excluded(
+    nodes: &[Node],
+    requested: &[FolderRef],
+) -> Result<HashSet<u32>, EngineError> {
     let mut excluded = HashSet::new();
     for folder in requested {
         if !nodes
@@ -15,7 +18,10 @@ pub(crate) fn excluded(nodes: &[Node], requested: &[FolderRef]) -> Result<HashSe
         {
             return Err(EngineError {
                 kind: ErrorKind::InvalidOptions,
-                message: format!("Excluded Folder 0x{:x} does not exist in this source.", folder.0),
+                message: format!(
+                    "Excluded Folder 0x{:x} does not exist in this source.",
+                    folder.0
+                ),
                 completed_files: vec![],
             });
         }
@@ -98,9 +104,11 @@ impl Selection {
             ("IPM_SUBTREE", "Deleted Items"),
         ] {
             let mut found = None;
-            for node in recovery.nodes.iter().filter(|n| {
-                matches!(n.nid_type(), 2 | 3) && system.contains(&n.nid_parent)
-            }) {
+            for node in recovery
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.nid_type(), 2 | 3) && system.contains(&n.nid_parent))
+            {
                 let parent = recovery
                     .nodes
                     .iter()
@@ -148,9 +156,7 @@ impl Selection {
         if !split {
             folders.extend(
                 all.iter()
-                    .filter(|n| {
-                        matches!(n.nid_type(), 2 | 3) && !self.excluded.contains(&n.nid)
-                    })
+                    .filter(|n| matches!(n.nid_type(), 2 | 3) && !self.excluded.contains(&n.nid))
                     .map(|n| n.nid),
             );
         }

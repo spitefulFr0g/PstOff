@@ -1,8 +1,8 @@
 //! Unicode NDB emission. All offsets and references are assigned afresh.
 mod cache;
 mod recovery;
-pub(crate) use recovery::Recovery;
 pub(super) use recovery::prepare as recover;
+pub(crate) use recovery::Recovery;
 mod context;
 mod store;
 mod table;
@@ -264,9 +264,14 @@ impl Output {
                             let value = match tag >> 16 {
                                 0x3602 | 0x3617 => {
                                     let kind = if tag >> 16 == 0x3602 { 4 } else { 8 };
-                                    Some(self.nodes.iter().filter(|n| {
-                                        n.nid_parent == *folder && n.nid_type() == kind
-                                    }).count() as u32)
+                                    Some(
+                                        self.nodes
+                                            .iter()
+                                            .filter(|n| {
+                                                n.nid_parent == *folder && n.nid_type() == kind
+                                            })
+                                            .count() as u32,
+                                    )
                                 }
                                 0x360a => Some(u32::from(self.nodes.iter().any(|n| {
                                     n.nid != *folder

@@ -4,7 +4,8 @@ PstOff is an MIT-licensed Windows OST-to-PST converter under construction.
 The engine and CLI inspect supported v36 OSTs and perform a first Copy mode
 conversion to a conventional Unicode PST. The GUI remains a skeleton.
 
-`pstoff convert <ost> --out <dir>` writes `<source-stem>.pst`, plus JSON and
+`pstoff convert <ost> --out <dir>` writes `<source-stem>-part001.pst` (and
+further numbered parts as needed), plus JSON and
 plain-text Conversion reports. The PST display name uses the source file stem.
 The source is opened read-only with concurrent writes/deletion denied. Output
 is staged in an exclusive temporary directory and renamed without replacing
@@ -12,11 +13,40 @@ existing files; the PST receives its final name only after it is complete.
 The reports state **Mailbox completeness: unknown**: an OST contains only
 what Outlook synced, so content never cached cannot be recovered from it.
 
-This tracer supports a single PST. Exclusions and explicit size limits are
-not implemented. The default 20 GiB policy accepts a single PST below that
-limit and fails without publication if splitting would be necessary. There
-is no in-place conversion. See [the #24 validation record](docs/issue-24-validation.md)
-for tested behavior and open public-fixture validation.
+The CLI uses the same public engine API as the GUI. Inspect first to see
+support status, folder IDs, counts and sizes:
+
+```text
+pstoff inspect source.ost
+pstoff convert source.ost --out destination --base-name archive --exclude-folder 0x182 --split-limit 21474836480
+pstoff convert source.ost --out destination --split-limit off
+```
+
+`--base-name` defaults to the source stem. Repeat `--exclude-folder` for each
+folder ID (decimal or `0x` hexadecimal); descendants follow the exclusion.
+`--split-limit` accepts a positive byte count or `off`, and defaults to 20 GiB.
+The limit includes finished-file overhead and keeps each Item whole. Report
+names are `<base-name>.json` and `<base-name>.txt`, independent of part names.
+Progress (percentage, Item counts, part and current folder ID) goes to stderr;
+results go to stdout. Ctrl+C cooperatively cancels, removes unfinished staging
+and keeps finished parts. Conversion is always Copy mode.
+
+Stable exit codes for both commands:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Other failure (including output collision or invalid engine options) |
+| 2 | Command-line usage error |
+| 3 | Unsupported input |
+| 4 | Input in use |
+| 5 | Insufficient space or an oversized Item under Split |
+| 6 | Conversion succeeded with Skipped items |
+| 130 | Conversion cancelled |
+
+Run `pstoff --help` for the command syntax. See
+[the #24 validation record](docs/issue-24-validation.md) for the earlier
+milestone's evidence and outstanding Faithful acceptance checks.
 
 ## Prepare and check
 

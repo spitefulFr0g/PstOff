@@ -131,6 +131,7 @@ name = "pstoff-cli"
 version = "0.1.0"
 dependencies = [
  "pstoff-engine",
+ "serde_json",
 ]
 
 [[package]]

@@ -56,8 +56,12 @@ pub(super) fn convert(
             format!("{}.pst", options.base_name)
         })
     };
-    let json = options.destination.join(format!("{}.json", options.base_name));
-    let text = options.destination.join(format!("{}.txt", options.base_name));
+    let json = options
+        .destination
+        .join(format!("{}.json", options.base_name));
+    let text = options
+        .destination
+        .join(format!("{}.txt", options.base_name));
     if [&output_path(1), &json, &text].iter().any(|p| p.exists()) {
         return Err(failure(
             ErrorKind::Collision,
@@ -244,12 +248,18 @@ fn folder_mapping(
     part: u32,
 ) -> Vec<FolderPart> {
     let mut folders = vec![];
-    for folder in planned.nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
+    for folder in planned
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.nid_type(), 2 | 3))
+    {
         let mut count = 0;
         let mut bytes = 0u64;
-        for item in planned.nodes.iter().filter(|n| {
-            n.nid_parent == folder.nid && matches!(n.nid_type(), 4 | 8)
-        }) {
+        for item in planned
+            .nodes
+            .iter()
+            .filter(|n| n.nid_parent == folder.nid && matches!(n.nid_type(), 4 | 8))
+        {
             count += 1;
             if let Ok(pc) = reader::item_properties(source, item) {
                 if let Some(pstoff_format::ltp::Value::Int(size)) = pc.props.get(&0x0e08) {
