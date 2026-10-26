@@ -27,13 +27,16 @@ fn source_store(items: Vec<Item>) -> Store {
                 children: vec![
                     Folder {
                         name: "Finder".into(),
+                        role: Some(synthetic::SystemFolder::Finder),
                         ..Default::default()
                     },
                     Folder {
                         name: "IPM_SUBTREE".into(),
+                        role: Some(synthetic::SystemFolder::IpmSubtree),
                         items,
                         children: vec![Folder {
                             name: "Deleted Items".into(),
+                            role: Some(synthetic::SystemFolder::Wastebasket),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -44,6 +47,321 @@ fn source_store(items: Vec<Item>) -> Store {
             ..Default::default()
         },
     }
+}
+
+fn folder_entry(id: u16, nid: u32) -> synthetic::Property {
+    let mut bytes = vec![0; 4];
+    bytes.extend_from_slice(&[0x23; 16]);
+    bytes.extend_from_slice(&nid.to_le_bytes());
+    synthetic::Property::binary(id, bytes)
+}
+
+#[test]
+fn localized_system_folder_entry_ids_retain_source_hierarchy_and_payload() {
+    let payload: Vec<_> = (0..20_000).map(|i| (i * 37 % 251) as u8).collect();
+    let mut item = Item::new("IPM.Note", 1234);
+    item.properties
+        .push(synthetic::Property::binary(0x6800, payload.clone()));
+    let mut input = source_store(vec![item]);
+    input.root.name = "Wurzel".into();
+    let mailbox = &mut input.root.children[0];
+    mailbox.name = "Persönlicher Speicher".into();
+    mailbox.children[0].name = "Recherche personnalisée".into();
+    mailbox.children[1].name = "Mes dossiers".into();
+    mailbox.children[1].children[0].name = "Gelöschte Objekte".into();
+    // IDs follow source traversal: root, mailbox, finder, subtree, Item, deleted.
+    let bytes = input.build_with_store_properties(&[
+        folder_entry(0x35e0, 0x182),
+        folder_entry(0x35e3, 0x1c2),
+        folder_entry(0x35e7, 0x162),
+    ]);
+    let (f, report) = complete(&bytes, "localized-identity");
+    let output = outlook_pst::open_store(&report.files[0].path).unwrap();
+    for (tag, nid) in [(0x35e0, 0x182), (0x35e3, 0x1c2), (0x35e7, 0x162)] {
+        let Some(outlook_pst::ltp::prop_context::PropertyValue::Binary(value)) =
+            output.properties().get(tag)
+        else {
+            panic!("missing store folder entry ID")
+        };
+        assert_eq!(value.buffer(), folder_entry(tag, nid).bytes);
+    }
+    assert_eq!(report.folders.len(), 5);
+    assert!(!report
+        .differences
+        .iter()
+        .any(|d| d.reason.contains("scaffolding")));
+    let id = output
+        .properties()
+        .make_entry_id(outlook_pst::ndb::node_id::NodeId::from(0x182u32))
+        .unwrap();
+    let subtree = output.open_folder(&id).unwrap();
+    assert_eq!(subtree.properties().display_name().unwrap(), "Mes dossiers");
+    let rows = independent_rows(subtree.contents_table().unwrap().as_ref());
+    assert_eq!(rows.iter().map(|row| row.0).collect::<Vec<_>>(), [0x1a4]);
+    assert_eq!(subtree.hierarchy_table().unwrap().rows_matrix().count(), 1);
+    let id = output.properties().make_entry_id(0x1a4u32.into()).unwrap();
+    let message = output.open_message(&id, None).unwrap();
+    let Some(outlook_pst::ltp::prop_context::PropertyValue::Binary(value)) =
+        message.properties().get(0x6800)
+    else {
+        panic!("missing synthetic payload")
+    };
+    assert_eq!(value.buffer(), payload);
+    assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+}
+
+#[test]
+fn source_folder_identity_overrides_english_decoys_in_split_and_exclusions() {
+    let mut input = source_store(vec![Item::new("IPM.Note", 100)]);
+    input.root.children[0].name = "Custom mailbox".into();
+    input.root.children[0].children[0].name = "Custom search".into();
+    input.root.children[0].children[1].name = "Custom subtree".into();
+    input.root.children[0].children[1].children[0].name = "Custom wastebasket".into();
+    input.root.children[0].children.push(Folder {
+        name: "IPM_SUBTREE".into(),
+        children: vec![Folder {
+            name: "Deleted Items".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    input.root.children[0].children.push(Folder {
+        name: "IPM_SUBTREE".into(),
+        ..Default::default()
+    });
+    let bytes = input.build_with_store_properties(&[
+        folder_entry(0x35e0, 0x182),
+        folder_entry(0x35e3, 0x1c2),
+        folder_entry(0x35e7, 0x162),
+    ]);
+    for excluded in [false, true] {
+        let f = support::Fixture::invalid();
+        std::fs::write(&f.source, &bytes).unwrap();
+        let mut options = ConvertOptions::new(f.root.join("out"), "identity".into());
+        options.split = pstoff_engine::Split::Bytes(u64::MAX);
+        if excluded {
+            options.exclusions.push(pstoff_engine::FolderRef(0x182));
+        }
+        let Conversion::Complete(report) =
+            convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+        else {
+            panic!("cancelled")
+        };
+        let output = outlook_pst::open_store(&report.files[0].path).unwrap();
+        assert_eq!(
+            report.folders.len(),
+            5,
+            "only resolved system roles and their ancestors"
+        );
+        assert!(!report
+            .differences
+            .iter()
+            .any(|d| d.reason.contains("scaffolding")));
+        let Some(outlook_pst::ltp::prop_context::PropertyValue::Binary(entry)) =
+            output.properties().get(0x35e0)
+        else {
+            panic!("missing subtree entry ID")
+        };
+        assert_eq!(entry.buffer(), folder_entry(0x35e0, 0x182).bytes);
+        let id = output.properties().make_entry_id(0x182u32.into()).unwrap();
+        let subtree = output.open_folder(&id).unwrap();
+        assert_eq!(
+            subtree.properties().display_name().unwrap(),
+            "Custom subtree"
+        );
+        assert_eq!(
+            subtree.contents_table().unwrap().rows_matrix().count(),
+            usize::from(!excluded)
+        );
+        assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn source_identity_supports_an_ipm_subtree_directly_under_root() {
+    let input = Store {
+        root: Folder {
+            name: "Custom root".into(),
+            children: vec![
+                Folder {
+                    name: "Custom IPM".into(),
+                    items: vec![Item::new("IPM.Note", 100)],
+                    children: vec![Folder {
+                        name: "Custom deleted".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                Folder {
+                    name: "Custom search".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+    };
+    let bytes = input.build_with_store_properties(&[
+        folder_entry(0x35e0, 0x142),
+        folder_entry(0x35e3, 0x182),
+        folder_entry(0x35e7, 0x1a2),
+    ]);
+    let (_f, report) = complete(&bytes, "direct-root");
+    assert_eq!(report.folders.len(), 4);
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
+    assert!(!report
+        .differences
+        .iter()
+        .any(|d| d.reason.contains("scaffolding")));
+    let output = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let id = output.properties().make_entry_id(0x142u32.into()).unwrap();
+    assert_eq!(
+        output
+            .open_folder(&id)
+            .unwrap()
+            .contents_table()
+            .unwrap()
+            .rows_matrix()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn unidentified_healthy_system_folders_fail_without_creating_scaffolding() {
+    for variant in 0..6 {
+        let mut input = source_store(vec![Item::new("IPM.Note", 100)]);
+        if variant == 1 {
+            input.root.children[0].name = "Custom mailbox".into();
+        }
+        if variant == 2 {
+            input.root.children[0].children.push(Folder {
+                name: "Unreadable sibling".into(),
+                unreadable: true,
+                ..Default::default()
+            });
+        }
+        if variant < 3 {
+            input.root.children[0].children[1].name = "Custom subtree".into();
+        }
+        if variant == 3 {
+            input.root.children[0].children[1].children[0].name = "Custom deleted".into();
+        }
+        if variant == 4 {
+            input.root.children[0].children[0].name = "Custom finder".into();
+        }
+        let properties = match variant {
+            3 => vec![folder_entry(0x35e0, 0x182), folder_entry(0x35e7, 0x162)],
+            4 => vec![folder_entry(0x35e0, 0x182), folder_entry(0x35e3, 0x1c2)],
+            _ => vec![], // Even canonical English names cannot establish identity.
+        };
+        let bytes = input.build_with_store_properties(&properties);
+        let f = support::Fixture::invalid();
+        std::fs::write(&f.source, &bytes).unwrap();
+        let options = unsplit_options(f.root.join("out"), "unidentified".into());
+        let error = convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            pstoff_engine::ErrorKind::DamagedSource
+        ));
+        assert!(error.message.contains("Cannot identify the source"));
+        assert!(error.completed_files.is_empty());
+        assert!(!options.destination.exists());
+        assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn invalid_source_system_entry_ids_do_not_fall_back_to_english_names() {
+    let mut variants = Vec::new();
+    let entry = folder_entry(0x35e0, 0x182);
+    let mut flags = entry.clone();
+    flags.bytes[0] = 1;
+    variants.push(flags);
+    let mut provider = entry.clone();
+    provider.bytes[4] ^= 1;
+    variants.push(provider);
+    let mut short = entry.clone();
+    short.bytes.pop();
+    variants.push(short);
+    let mut kind = entry.clone();
+    kind.kind = 0x1f;
+    variants.push(kind);
+    variants.extend([
+        folder_entry(0x35e0, 0x1a4),      // Item, not a folder.
+        folder_entry(0x35e0, 0xffffffe2), // Missing folder.
+        folder_entry(0x35e0, 0x122),      // Root cannot be its own subtree.
+        folder_entry(0x35e3, 0x162),      // Finder is outside the IPM subtree.
+        folder_entry(0x35e7, 0x1c2),      // Finder cannot be a child of IPM.
+    ]);
+    for invalid in variants {
+        let mut properties = vec![
+            folder_entry(0x35e0, 0x182),
+            folder_entry(0x35e3, 0x1c2),
+            folder_entry(0x35e7, 0x162),
+        ];
+        properties.retain(|p| p.id != invalid.id);
+        properties.push(invalid);
+        let bytes =
+            source_store(vec![Item::new("IPM.Note", 100)]).build_with_store_properties(&properties);
+        let f = support::Fixture::invalid();
+        std::fs::write(&f.source, &bytes).unwrap();
+        let options = unsplit_options(f.root.join("out"), "invalid-identity".into());
+        let error = convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            pstoff_engine::ErrorKind::DamagedSource
+        ));
+        assert!(error.message.contains("system folder"));
+        assert!(error.completed_files.is_empty());
+        assert!(!options.destination.exists());
+        assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn identified_unreadable_localized_subtree_gets_reported_empty_scaffolding() {
+    let mut input = source_store(vec![Item::new("IPM.Note", 100)]);
+    input.root.children[0].name = "Custom mailbox".into();
+    input.root.children[0].children[0].name = "Custom search".into();
+    let subtree = &mut input.root.children[0].children[1];
+    subtree.name = "Custom IPM".into();
+    subtree.unreadable = true;
+    let bytes = input.build_with_store_properties(&[
+        folder_entry(0x35e0, 0x182),
+        folder_entry(0x35e3, 0x1c2),
+        folder_entry(0x35e7, 0x162),
+    ]);
+    let (_f, report) = complete(&bytes, "unreadable-identity");
+    checked(&report.evidence.unreadable, 1);
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 0);
+    assert!(report.skipped.iter().any(|s| matches!(&s.reference,
+        pstoff_engine::LocalRef::Folder(folder) if folder.0 == 0x182)));
+    assert!(report
+        .differences
+        .iter()
+        .any(|d| d.reason.contains("scaffolding")));
+    let output = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let Some(outlook_pst::ltp::prop_context::PropertyValue::Binary(entry)) =
+        output.properties().get(0x35e0)
+    else {
+        panic!("missing replacement subtree entry ID")
+    };
+    let replacement = u32::from_le_bytes(entry.buffer()[20..24].try_into().unwrap());
+    assert_ne!(replacement, 0x182);
+    let id = output
+        .properties()
+        .make_entry_id(replacement.into())
+        .unwrap();
+    assert_eq!(
+        output
+            .open_folder(&id)
+            .unwrap()
+            .contents_table()
+            .unwrap()
+            .rows_matrix()
+            .count(),
+        0
+    );
 }
 
 #[test]

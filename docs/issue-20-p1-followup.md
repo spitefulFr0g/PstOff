@@ -6,6 +6,44 @@ Acceptance contract: issue #20, particularly stories 31, 35, 44, 45 and the
 public-API failure/readback testing decisions. This follow-up does not establish
 the Faithful acceptance gate or make the integration PR ready to merge.
 
+## Subsequent P1 follow-up from `b78c1ee`
+
+[Source folder identity](source-folder-identity.md) now defines local EntryID
+resolution and the conservative failure behavior when identity
+metadata is absent. Recovery, selection and store emission share those IDs;
+source display names never establish folder roles. Synthetic regressions
+cover localized/custom roles and prevent silent scaffolding of an unidentified
+healthy hierarchy.
+
+The memory P1 uses the requested design-refinement route:
+[the quantified memory contract](issue-20-memory-budget.md) specifies buffer
+reservations, spool encoding, merge/disk/I/O costs, metadata lower bounds and
+the missing ceiling-test infrastructure. No memory implementation or passing
+large-store ceiling test is claimed; story 35 remains blocked.
+
+Validation of the subsequent follow-up (generated synthetic inputs only, all
+Rust commands through Windows Sandbox wrappers after establishing no Sandbox
+was active):
+
+- Against `b78c1ee`, `python scripts/sandbox-cargo.py test --locked -p
+  pstoff-engine --test convert
+  localized_system_folder_entry_ids_retain_source_hierarchy_and_payload --
+  --exact` failed as expected: the source subtree EntryID pointed to `0x182`,
+  but the original engine published a pointer to generated empty folder `0x222`.
+- Final `python scripts/sandbox-cargo.py test --locked -p pstoff-engine --test
+  convert`: 34 passed, zero failed. This includes six new test functions, source
+  byte preservation, independent Microsoft reader row-ID/payload readback and
+  explicit missing/invalid identity cases. English names without role metadata
+  also fail safely; no name-based compatibility path remains in the engine.
+- Final `$env:PYTHONUTF8='1'; python scripts/check`: dependency audit passed for
+  376 Windows packages; formatting and clippy (all targets, warnings denied)
+  passed; 96 tests passed, zero failed, two fixture-export tests ignored.
+
+No unowned Sandbox was stopped or modified. Competing sessions delayed checks;
+waiting wrappers belonging to this task were stopped rather than left queued.
+No private/unknown mail input, Faithful check, PR metadata/comment/merge action,
+release build or manual application check was used for this follow-up.
+
 ## Cache policy and publication
 
 - Q16 contents rows (normal, associated and search contents) use the Item's
@@ -36,6 +74,12 @@ and unsplit modes check output cleanup, completed-file references, preservation
 of the other caller's file, and unchanged synthetic source bytes.
 
 ## Bounded memory remains an open blocker
+
+The follow-up [memory contract and spill design](issue-20-memory-budget.md)
+refines this proposal with a shared 16 MiB buffer budget, fixed spool records,
+merge fan-in and disk/I/O arithmetic, metadata lower bounds, required API
+changes and an isolated large-store ceiling-test contract. It does not claim
+that the implementation is bounded or that story 35 is complete.
 
 No memory fix is claimed or shipped here. The current ownership model cannot
 provide story 35's bound by adjusting the Split limit or deleting one clone.

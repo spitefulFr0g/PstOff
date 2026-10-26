@@ -1,5 +1,5 @@
 //! Validate source contexts before emitting anything. Output I/O errors remain fatal.
-use super::{context, table, Result};
+use super::{context, system, table, Result};
 use crate::*;
 use pstoff_format::{
     ltp,
@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 #[derive(Clone)]
 pub(crate) struct Recovery {
     pub nodes: Vec<Node>,
+    pub system: system::SystemFolders,
     pub created: BTreeMap<u32, String>,
     pub omitted: HashSet<u32>,
     pub skipped: Vec<Skipped>,
@@ -71,6 +72,7 @@ fn evidence(references: Vec<ItemRef>, unchecked: &[ItemRef]) -> Evidence {
 }
 
 pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) -> Result<Recovery> {
+    let identity = system::resolve(source, nodes)?;
     let names = ltp::read_named_properties(source, nodes)?;
     let header_ids: Vec<_> = names
         .iter()
@@ -224,13 +226,14 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
         .filter(|n| !omitted.contains(&n.nid))
         .cloned()
         .collect();
-    let created = repair_structure(
-        source,
+    let (system, created) = system::repair(
+        identity,
         &mut retained,
         nodes.iter().map(|n| n.nid & !31).max().unwrap_or(0x120),
     )?;
     Ok(Recovery {
         nodes: retained,
+        system,
         created,
         omitted,
         skipped,
@@ -264,47 +267,7 @@ fn valid_target(s: &str, web: bool) -> bool {
     }
 }
 
-// Required PST scaffolding is output metadata, not recovered mail. Missing source
-// folders stay skipped; newly created empty folders have explicit differences.
-fn repair_structure(
-    source: &mut Pst,
-    nodes: &mut Vec<Node>,
-    highwater: u32,
-) -> Result<BTreeMap<u32, String>> {
-    let mut names = BTreeMap::new();
-    for n in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
-        let pc = ltp::read_node_pc(source, n)?;
-        names.insert(n.nid, pc.str(0x3001).unwrap_or("").to_owned());
-    }
-    let mut created = BTreeMap::new();
-    let mut next = highwater.checked_add(32).ok_or("Folder ID overflow")?;
-    if !names.contains_key(&0x122) {
-        add_folder(nodes, &mut created, 0x122, 0x122, "Root");
-    }
-    let mut ensure = |nodes: &mut Vec<Node>, parent: u32, name: &str| -> Result<u32> {
-        let found: Vec<_> = nodes
-            .iter()
-            .filter(|n| n.nid_parent == parent && names.get(&n.nid).is_some_and(|v| v == name))
-            .map(|n| n.nid)
-            .collect();
-        if found.len() > 1 {
-            return Err("Ambiguous required folder identity".into());
-        }
-        if let Some(id) = found.first() {
-            return Ok(*id);
-        }
-        let id = next | 2;
-        next = next.checked_add(32).ok_or("Folder ID overflow")?;
-        add_folder(nodes, &mut created, id, parent, name);
-        Ok(id)
-    };
-    let mailbox = ensure(nodes, 0x122, "Root - Mailbox")?;
-    ensure(nodes, mailbox, "Finder")?;
-    let subtree = ensure(nodes, mailbox, "IPM_SUBTREE")?;
-    ensure(nodes, subtree, "Deleted Items")?;
-    Ok(created)
-}
-fn add_folder(
+pub(super) fn add_folder(
     nodes: &mut Vec<Node>,
     created: &mut BTreeMap<u32, String>,
     id: u32,

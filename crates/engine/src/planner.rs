@@ -1,9 +1,6 @@
 //! Selection uses global NIDs only; nested Item subnodes always travel whole.
 use crate::*;
-use pstoff_format::{
-    ltp,
-    ndb::{Node, Pst},
-};
+use pstoff_format::ndb::Node;
 use std::collections::HashSet;
 
 pub(crate) fn excluded(
@@ -48,21 +45,6 @@ pub(crate) struct Selection {
     excluded: HashSet<u32>,
 }
 
-fn folder_name(
-    source: &mut Pst,
-    recovery: &writer::Recovery,
-    node: &Node,
-) -> Result<String, Box<dyn std::error::Error>> {
-    if let Some(name) = recovery.created.get(&node.nid) {
-        Ok(name.clone())
-    } else {
-        Ok(ltp::read_node_pc(source, node)?
-            .str(0x3001)
-            .unwrap_or("")
-            .to_owned())
-    }
-}
-
 fn selected_evidence(evidence: &mut Evidence, excluded: &HashSet<u32>) {
     match evidence {
         Evidence::NotChecked => (),
@@ -89,45 +71,9 @@ fn selected_evidence(evidence: &mut Evidence, excluded: &HashSet<u32>) {
 }
 
 impl Selection {
-    pub fn new(
-        source: &mut Pst,
-        mut recovery: writer::Recovery,
-        excluded: HashSet<u32>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Use the exact store-policy hierarchy, not names elsewhere in the tree.
-        // System shells survive even when their source contents are excluded.
-        let mut system = HashSet::from([0x122]);
-        for (parent_name, name) in [
-            ("", "Root - Mailbox"),
-            ("Root - Mailbox", "Finder"),
-            ("Root - Mailbox", "IPM_SUBTREE"),
-            ("IPM_SUBTREE", "Deleted Items"),
-        ] {
-            let mut found = None;
-            for node in recovery
-                .nodes
-                .iter()
-                .filter(|n| matches!(n.nid_type(), 2 | 3) && system.contains(&n.nid_parent))
-            {
-                let parent = recovery
-                    .nodes
-                    .iter()
-                    .find(|p| p.nid == node.nid_parent)
-                    .ok_or("Missing folder parent")?;
-                let parent_matches = if parent_name.is_empty() {
-                    parent.nid == 0x122
-                } else {
-                    folder_name(source, &recovery, parent)? == parent_name
-                };
-                if parent_matches
-                    && folder_name(source, &recovery, node)? == name
-                    && found.replace(node.nid).is_some()
-                {
-                    return Err("Ambiguous system folder".into());
-                }
-            }
-            system.insert(found.ok_or("Missing system folder")?);
-        }
+    pub fn new(mut recovery: writer::Recovery, excluded: HashSet<u32>) -> Self {
+        // Recovery, selection and store emission share the resolved source roles.
+        let system = HashSet::from(recovery.system.ids());
         recovery.skipped.retain(|s| match &s.reference {
             LocalRef::Folder(f) => !excluded.contains(&f.0),
             LocalRef::Item(i) => !excluded.contains(&i.folder.0),
@@ -142,12 +88,12 @@ impl Selection {
             .cloned()
             .collect();
         items.sort_by_key(|n| n.nid);
-        Ok(Self {
+        Self {
             recovery,
             items,
             system,
             excluded,
-        })
+        }
     }
 
     pub fn part(&self, items: &[Node], split: bool) -> writer::Recovery {

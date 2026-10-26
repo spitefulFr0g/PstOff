@@ -8,10 +8,18 @@ pub struct Store {
 #[derive(Default)]
 pub struct Folder {
     pub name: String,
+    pub role: Option<SystemFolder>,
     pub items: Vec<Item>,
     pub children: Vec<Folder>,
     pub unreadable: bool,
     pub unreadable_table: bool,
+}
+#[allow(dead_code)] // Reader-only targets do not need message-store folder roles.
+#[derive(Clone, Copy)]
+pub enum SystemFolder {
+    IpmSubtree = 0x35e0,
+    Wastebasket = 0x35e3,
+    Finder = 0x35e7,
 }
 #[derive(Default)]
 pub struct Item {
@@ -97,15 +105,36 @@ impl Store {
         )
     }
     pub fn build_with_header_identity(&self, index: u16, guid: [u8; 16], lid: u32) -> Vec<u8> {
-        let mut w = Writer::default();
-        w.node(
-            0x21,
+        self.build_with_metadata(index, guid, lid, &[], true)
+    }
+    #[allow(dead_code)] // Shared builder is also compiled by reader-only test targets.
+    pub fn build_with_store_properties(&self, properties: &[Property]) -> Vec<u8> {
+        self.build_with_metadata(
             0,
-            &[
-                Property::binary(0x0ff9, vec![0x23; 16]),
-                Property::text(0x3001, "Synthetic store"),
-            ],
-        );
+            [8, 0x20, 6, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+            0x8578,
+            properties,
+            false,
+        )
+    }
+    fn build_with_metadata(
+        &self,
+        index: u16,
+        guid: [u8; 16],
+        lid: u32,
+        properties: &[Property],
+        automatic_roles: bool,
+    ) -> Vec<u8> {
+        let mut w = Writer::default();
+        let mut store = vec![
+            Property::binary(0x0ff9, vec![0x23; 16]),
+            Property::text(0x3001, "Synthetic store"),
+        ];
+        store.extend_from_slice(properties);
+        if automatic_roles {
+            folder_roles(&self.root, &mut 0x120, &mut store);
+        }
+        w.node(0x21, 0, &store);
         // PidLidHeaderItem: PSETID_Common, LID 0x8578, mapped to 0x8000.
         let mut entry = vec![0; 8];
         p32(&mut entry, 0, lid);
@@ -122,6 +151,22 @@ impl Store {
         );
         w.folder(&self.root, 0, &mut 0x120);
         w.finish()
+    }
+}
+// Folder roles are fixture declarations, never inferred from display names.
+// Traverse the same global NID sequence as Writer::folder (nested subnodes do
+// not consume global IDs). Explicit store-property cases bypass these defaults.
+fn folder_roles(folder: &Folder, next: &mut u32, properties: &mut Vec<Property>) {
+    let nid = *next | 2;
+    *next += 32 + folder.items.len() as u32 * 32;
+    if let Some(role) = folder.role {
+        let mut entry = vec![0; 4];
+        entry.extend_from_slice(&[0x23; 16]);
+        entry.extend_from_slice(&nid.to_le_bytes());
+        properties.push(Property::binary(role as u16, entry));
+    }
+    for child in &folder.children {
+        folder_roles(child, next, properties);
     }
 }
 fn p16(b: &mut [u8], at: usize, n: u16) {

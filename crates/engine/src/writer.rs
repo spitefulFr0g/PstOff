@@ -5,6 +5,7 @@ pub(super) use recovery::prepare as recover;
 pub(crate) use recovery::Recovery;
 mod context;
 mod store;
+mod system;
 mod table;
 use outlook_pst::{PstFile, UnicodePstFile};
 use pstoff_format::ndb::{crc32, Node, Pst};
@@ -425,7 +426,7 @@ pub(super) fn write(
     if cancel.is_cancelled() {
         return Ok(None);
     }
-    let (store_cells, mut differences) = store::prepare(source, nodes, display, &recovery.created)?;
+    let (store_cells, mut differences) = store::prepare(source, nodes, display, &recovery.system)?;
     let Some(planned) =
         cache::prepare(source, nodes, &mut differences, cancel, omitted).map_err(|error| {
             crate::EngineError {
