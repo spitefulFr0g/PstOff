@@ -107,11 +107,18 @@ fn saves_reports_with_source_identity_counts_and_completeness_explanation() {
     assert_eq!(saved.folders.len(), 5);
     assert_eq!(saved.folders.iter().map(|f| f.items).sum::<u64>(), 1);
     assert_eq!(saved.folders.iter().map(|f| f.bytes).sum::<u64>(), 1234);
-    for report in [json, text] {
+    for report in [&json, &text] {
         assert!(report.contains("Mailbox completeness: unknown"));
         assert!(report.contains("synced"));
         assert!(report.contains("source_sha256") || report.contains("SHA-256"));
     }
+    assert!(text.contains("Headers-only Items: Not checked"));
+    assert!(text.contains("Unreadable content: Not checked"));
+    assert!(text.contains("External attachment references: Not checked"));
+    assert!(text.contains("part 1"));
+    assert!(text.contains("Property 0x3001001f"));
+    assert!(text.contains("Source store and system folder hierarchy"));
+    assert!(text.contains("PST display name comes from the source file name."));
 }
 #[test]
 fn final_name_is_absent_until_publication_and_cancellation_cleans_staging() {

@@ -229,20 +229,69 @@ fn report_text(report: &ConversionReport) -> String {
         report.source_sha256
     );
     for file in &report.files {
-        let _ = writeln!(text, "File: {} ({} bytes)", file.path.display(), file.bytes);
+        let _ = writeln!(text, "File: {} ({} bytes, part {})",
+            file.path.display(),
+            file.bytes,
+            file.part);
     }
     for folder in &report.folders {
         let _ = writeln!(
             text,
-            "Folder 0x{:x}: {} items, {} bytes",
-            folder.folder.0, folder.items, folder.bytes
+            "Folder 0x{:x}: {} items, {} bytes, part {}",
+            folder.folder.0, folder.items, folder.bytes, folder.part
+        );
+    }
+    for (label, evidence) in [
+        ("Headers-only Items", &report.evidence.headers_only),
+        ("Unreadable content", &report.evidence.unreadable),
+        (
+            "External attachment references",
+            &report.evidence.external_references,
+        ),
+    ] {
+        match evidence {
+            Evidence::NotChecked => {
+                let _ = writeln!(text, "{label}: Not checked");
+            }
+            Evidence::Checked { count, references } => {
+                let _ = writeln!(text, "{label}: {count}");
+                for item in references {
+                    let _ = writeln!(text, "  {}", local_reference(&LocalRef::Item(item.clone())));
+                }
+            }
+        }
+    }
+    let _ = writeln!(text, "Skipped: {}", report.skipped.len());
+    for skipped in &report.skipped {
+        let _ = writeln!(
+            text,
+            "  {}: {}",
+            local_reference(&skipped.reference),
+            skipped.reason
         );
     }
     let _ = writeln!(
         text,
-        "Skipped: {}\nRecorded property differences: {}",
-        report.skipped.len(),
+        "Recorded property differences: {}",
         report.differences.len()
     );
+    for difference in &report.differences {
+        let reference = difference.item.as_ref().map_or_else(
+            || "Store".into(),
+            |item| local_reference(&LocalRef::Item(item.clone())),
+        );
+        let _ = writeln!(
+            text,
+            "  Property 0x{:08x}, {}\n    Source: {}\n    Reason: {}",
+            difference.property, reference, difference.source, difference.reason
+        );
+    }
     text
+}
+
+fn local_reference(reference: &LocalRef) -> String {
+    match reference {
+        LocalRef::Folder(folder) => format!("Folder 0x{:x}", folder.0),
+        LocalRef::Item(item) => format!("Folder 0x{:x}, Item 0x{:x}", item.folder.0, item.node),
+    }
 }
