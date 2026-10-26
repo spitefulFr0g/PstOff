@@ -1,4 +1,4 @@
-use pstoff_engine::{inspect, Support};
+use pstoff_engine::{convert, inspect, CancelToken, ConvertOptions, ErrorKind, Progress, Support};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -6,22 +6,53 @@ fn main() -> ExitCode {
     let mut args = std::env::args_os();
     let program = args.next().unwrap_or_default();
     let Some(command) = args.next() else {
-        eprintln!("Usage: {} inspect <ost>", Path::new(&program).display());
+        eprintln!(
+            "Usage: {} inspect <ost> | convert <ost> <destination>",
+            Path::new(&program).display()
+        );
         return ExitCode::from(2);
     };
-    if command != "inspect" {
+    if command != "inspect" && command != "convert" {
         eprintln!("Unknown command: {}", Path::new(&command).display());
         return ExitCode::from(2);
     }
     let Some(path) = args.next() else {
-        eprintln!("Usage: {} inspect <ost>", Path::new(&program).display());
+        eprintln!(
+            "Usage: {} inspect <ost> | convert <ost> <destination>",
+            Path::new(&program).display()
+        );
         return ExitCode::from(2);
     };
-    if args.next().is_some() {
+    let destination = args.next();
+    if args.next().is_some()
+        || (command == "inspect" && destination.is_some())
+        || (command == "convert" && destination.is_none())
+    {
         eprintln!("Usage: {} inspect <ost>", Path::new(&program).display());
         return ExitCode::from(2);
     }
 
+    if command == "convert" {
+        let destination = Path::new(destination.as_ref().unwrap());
+        let base_name = Path::new(&path)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let options = ConvertOptions::new(destination.to_path_buf(), base_name);
+        let mut progress = |_p: Progress| {};
+        return match convert(&path, &options, &mut progress, &CancelToken::default()) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("Conversion failed: {error}");
+                if matches!(error.kind, ErrorKind::Unsupported(_)) {
+                    ExitCode::from(3)
+                } else {
+                    ExitCode::FAILURE
+                }
+            }
+        };
+    }
     match inspect(&path) {
         Ok(result) => {
             println!("Source: {}", result.source.display());
@@ -40,7 +71,11 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("Inspection failed: {error}");
-            ExitCode::FAILURE
+            if matches!(error.kind, ErrorKind::Unsupported(_)) {
+                ExitCode::from(3)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }

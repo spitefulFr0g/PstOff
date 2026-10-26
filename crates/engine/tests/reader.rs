@@ -229,6 +229,18 @@ fn supported_but_truncated_header_is_damage() {
 }
 
 #[test]
+fn truncated_and_non_ost_files_are_damaged_not_unsupported_versions() {
+    let f = support::Fixture::invalid();
+    for bytes in [vec![0; 8], b"not an ost file".to_vec()] {
+        std::fs::write(&f.source, bytes).unwrap();
+        assert!(matches!(
+            inspect(&f.source).unwrap_err().kind,
+            ErrorKind::DamagedSource
+        ));
+    }
+}
+
+#[test]
 fn compressed_item_block_has_same_observable_result() {
     let f = support::Fixture::invalid();
     let mut bytes = store();

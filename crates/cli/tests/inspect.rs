@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn inspect_smoke_prints_store_support_and_folder_summary() {
+fn inspect_rejects_non_ost_as_damaged() {
     let root = std::env::temp_dir().join(format!(
         "pstoff-cli-inspect-{}-{}",
         std::process::id(),
@@ -19,10 +19,10 @@ fn inspect_smoke_prints_store_support_and_folder_summary() {
         .arg(&source)
         .output()
         .unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Support: unsupported (InvalidHeader)"));
-    assert!(stdout.contains("Folders: none"));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("not a valid OST header"));
     assert_eq!(std::fs::read(&source).unwrap(), [0; 512]);
 
     std::fs::remove_dir_all(root).unwrap();
@@ -36,4 +36,27 @@ fn inspect_rejects_missing_path_argument() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8(output.stderr).unwrap().contains("Usage:"));
+}
+
+#[test]
+fn convert_unsupported_input_exits_three_without_output() {
+    let root = std::env::temp_dir().join(format!("pstoff-cli-unsupported-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("unsupported.ost");
+    let output_dir = root.join("out");
+    std::fs::create_dir(&output_dir).unwrap();
+    let mut header = vec![0; 564];
+    header[..4].copy_from_slice(b"!BDN");
+    header[8..10].copy_from_slice(b"SO");
+    header[10..12].copy_from_slice(&14u16.to_le_bytes());
+    std::fs::write(&source, header).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_pstoff-cli"))
+        .arg("convert")
+        .arg(&source)
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+    std::fs::remove_dir_all(root).unwrap();
 }

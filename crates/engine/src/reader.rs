@@ -39,7 +39,10 @@ fn classify(file: &mut File) -> Result<Support, EngineError> {
         .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
     let unsupported = |r| Ok(Support::Unsupported(r));
     if h.len() < 12 || &h[..4] != b"!BDN" || &h[8..10] != b"SO" {
-        return unsupported(UnsupportedReason::InvalidHeader);
+        return Err(error(
+            ErrorKind::DamagedSource,
+            "The file is not a valid OST header.",
+        ));
     }
     let version = u16::from_le_bytes([h[10], h[11]]);
     match version {
@@ -113,7 +116,7 @@ pub(crate) fn read_source(
             return Err(error(
                 ErrorKind::Unsupported(reason),
                 "This OST format is not supported.",
-            ))
+            ));
         }
         Support::InUse => return Err(error(ErrorKind::InUse, "Close Outlook and retry this OST.")),
         Support::Supported => (),
