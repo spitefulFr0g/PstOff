@@ -1,5 +1,7 @@
 //! Unicode NDB emission. All offsets and references are assigned afresh.
 mod cache;
+mod recovery;
+pub(super) use recovery::prepare as recover;
 mod context;
 mod store;
 mod table;
@@ -48,6 +50,8 @@ struct Output {
     differences: Vec<crate::Difference>,
     highwater: u32,
     planned: std::collections::BTreeMap<u32, context::Properties>,
+    omitted: std::collections::HashSet<u32>,
+    created: std::collections::BTreeMap<u32, String>,
 }
 impl Output {
     // Reserve allocation-map slots, including PMAP/FMAP/FPMAP when applicable.
@@ -238,6 +242,22 @@ impl Output {
             } else {
                 Some(table::read(source, bid, sub)?)
             };
+            if let Some(table) = &mut table {
+                // Omitted references are global NIDs. Nested recipient/attachment
+                // table row IDs live in local namespaces and must remain untouched.
+                if matches!(nid & 31, 0xd..=0x10) {
+                    table.rows.retain(|(row, _, _)| !self.omitted.contains(row));
+                }
+                if nid & 31 == 0xd {
+                    for n in self.nodes.iter().filter(|n| {
+                        self.created.contains_key(&n.nid)
+                            && n.nid != (nid & !31 | 2)
+                            && n.nid_parent == (nid & !31 | 2)
+                    }) {
+                        table.add_identity_row(n.nid);
+                    }
+                }
+            }
             if matches!(nid & 31, 0x0e..=0x10) {
                 table
                     .as_mut()
@@ -340,12 +360,14 @@ impl Output {
 
 pub(super) fn write(
     source: &mut Pst,
-    nodes: &[Node],
+    recovery: &recovery::Recovery,
     path: &Path,
     display: &str,
     progress: &mut dyn crate::ProgressSink,
     cancel: &crate::CancelToken,
 ) -> Result<Option<Vec<crate::Difference>>> {
+    let nodes = &recovery.nodes;
+    let omitted = &recovery.omitted;
     let total = nodes
         .iter()
         .filter(|n| matches!(n.nid_type(), 4 | 8))
@@ -361,8 +383,8 @@ pub(super) fn write(
     if cancel.is_cancelled() {
         return Ok(None);
     }
-    let (store_cells, mut differences) = store::prepare(source, nodes, display)?;
-    let Some(planned) = cache::prepare(source, nodes, &mut differences, cancel)? else {
+    let (store_cells, mut differences) = store::prepare(source, nodes, display, &recovery.created)?;
+    let Some(planned) = cache::prepare(source, nodes, &mut differences, cancel, omitted)? else {
         return Ok(None);
     };
     let file = std::fs::OpenOptions::new()
@@ -380,25 +402,90 @@ pub(super) fn write(
         differences,
         highwater: 1024,
         planned,
+        omitted: omitted.clone(),
+        created: recovery.created.clone(),
     };
     let mut entries = Vec::new();
     for node in nodes {
         if cancel.is_cancelled() {
             return Ok(None);
         }
-        let override_cells = if node.nid == 0x21 {
+        let override_cells = if recovery.created.contains_key(&node.nid) {
+            Some(context::folder(
+                &recovery.created[&node.nid],
+                0,
+                0,
+                nodes
+                    .iter()
+                    .any(|n| n.nid != node.nid && n.nid_parent == node.nid),
+            ))
+        } else if !omitted.is_empty() && matches!(node.nid_type(), 2 | 3) {
+            let mut cells = context::properties(source, node.bid_data, node.bid_sub)?;
+            for (id, kind) in [(0x3602, 4), (0x3617, 8)] {
+                if let Some(cell) = cells.get_mut(&id) {
+                    let count = nodes
+                        .iter()
+                        .filter(|n| n.nid_parent == node.nid && n.nid_type() == kind)
+                        .count() as u32;
+                    let bytes = count.to_le_bytes().to_vec();
+                    if cell.bytes != bytes {
+                        out.differences.push(crate::Difference { property: (id as u32) << 16 | cell.kind as u32, item: None, source: format!("Folder 0x{:x}", node.nid), reason: "Folder count reflects readable Items retained after reported skips.".into() });
+                        cell.bytes = bytes;
+                    }
+                }
+            }
+            if let Some(cell) = cells.get_mut(&0x360a) {
+                let has_children = nodes.iter().any(|n| {
+                    n.nid != node.nid && n.nid_parent == node.nid && matches!(n.nid_type(), 2 | 3)
+                });
+                cell.bytes = u32::from(has_children).to_le_bytes().to_vec();
+            }
+            Some(cells)
+        } else if node.nid == 0x21 {
             Some(store_cells.clone())
         } else {
             out.planned.get(&node.nid).cloned()
         };
-        let (data, sub) = out.context_with_cells(
-            source,
-            node.bid_data,
-            node.bid_sub,
-            0,
-            override_cells.as_ref(),
-            node.nid,
-        )?;
+        let generated_table = matches!(node.nid_type(), 0xd..=0xf)
+            && recovery.created.keys().any(|id| id & !31 == node.nid & !31);
+        let (data, sub) = if recovery.created.contains_key(&node.nid) || generated_table {
+            let mut heap = context::HeapBuilder::new(if generated_table { 0x7c } else { 0xbc });
+            let root = if generated_table {
+                let rows = if node.nid_type() == 0xd {
+                    nodes
+                        .iter()
+                        .filter(|n| {
+                            n.nid != (node.nid & !31 | 2)
+                                && n.nid_parent == (node.nid & !31 | 2)
+                                && matches!(n.nid_type(), 2 | 3)
+                        })
+                        .map(|n| n.nid)
+                        .collect()
+                } else {
+                    vec![]
+                };
+                table::empty(rows).build(&mut heap, |_| {
+                    Err("Unexpected generated table payload".into())
+                })?
+            } else {
+                out.differences.push(crate::Difference { property: 0x3001001f, item: None,
+                    source: format!("Output system folder 0x{:x}", node.nid),
+                    reason: "Created empty required PST scaffolding; no source mail recovered into this folder.".into() });
+                context::pc(override_cells.as_ref().unwrap(), &mut heap, |_| {
+                    Err("Unexpected generated folder payload".into())
+                })?
+            };
+            (out.stream(&heap.finish(root))?, 0)
+        } else {
+            out.context_with_cells(
+                source,
+                node.bid_data,
+                node.bid_sub,
+                0,
+                override_cells.as_ref(),
+                node.nid,
+            )?
+        };
         let mut entry = vec![0; 32];
         p64(&mut entry, 0, node.nid as u64);
         p64(&mut entry, 8, data);

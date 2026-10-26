@@ -10,6 +10,9 @@ fn source() -> Vec<u8> {
 }
 
 fn source_items(items: Vec<Item>) -> Vec<u8> {
+    source_store(items).build()
+}
+fn source_store(items: Vec<Item>) -> Store {
     Store {
         root: Folder {
             name: "Root".into(),
@@ -35,7 +38,6 @@ fn source_items(items: Vec<Item>) -> Vec<u8> {
             ..Default::default()
         },
     }
-    .build()
 }
 
 #[test]
@@ -112,9 +114,9 @@ fn saves_reports_with_source_identity_counts_and_completeness_explanation() {
         assert!(report.contains("synced"));
         assert!(report.contains("source_sha256") || report.contains("SHA-256"));
     }
-    assert!(text.contains("Headers-only Items: Not checked"));
-    assert!(text.contains("Unreadable content: Not checked"));
-    assert!(text.contains("External attachment references: Not checked"));
+    assert!(text.contains("Headers-only Items: 0"));
+    assert!(text.contains("Unreadable content: 0"));
+    assert!(text.contains("External attachment references: 0"));
     assert!(text.contains("part 1"));
     assert!(text.contains("Property 0x3001001f"));
     assert!(text.contains("Source store and system folder hierarchy"));
@@ -322,4 +324,255 @@ fn all_item_classes_and_short_non_final_streams_round_trip_with_valid_totals() {
     assert!(short_non_final >= 6);
     assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 6);
     assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+}
+
+fn complete(bytes: &[u8], base: &str) -> (support::Fixture, pstoff_engine::ConversionReport) {
+    let f = support::Fixture::invalid();
+    std::fs::write(&f.source, bytes).unwrap();
+    let options = ConvertOptions::new(f.root.join("out"), base.into());
+    let Conversion::Complete(report) =
+        convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap()
+    else {
+        panic!("cancelled")
+    };
+    assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+    (f, *report)
+}
+fn checked(e: &pstoff_engine::Evidence, expected: usize) {
+    let pstoff_engine::Evidence::Checked { count, references } = e else {
+        panic!("{e:?}")
+    };
+    assert_eq!(*count as usize, expected);
+    assert_eq!(references.len(), expected);
+}
+#[test]
+fn unreadable_item_is_skipped_and_contents_counts_are_repaired() {
+    let mut damaged = Item::new("IPM.Note", 100);
+    damaged.unreadable = true;
+    let bytes = source_items(vec![damaged, Item::new("IPM.Contact", 200)]);
+    let (_f, report) = complete(&bytes, "item-recovery");
+    assert_eq!(report.skipped.len(), 1);
+    assert!(matches!(
+        report.skipped[0].code,
+        pstoff_engine::SkipReason::UnreadableItem
+    ));
+    let pstoff_engine::LocalRef::Item(item) = &report.skipped[0].reference else {
+        panic!("item expected")
+    };
+    checked(&report.evidence.unreadable, 1);
+    assert!(
+        matches!(&report.evidence.headers_only, pstoff_engine::Evidence::Incomplete { count: 0, unchecked, .. } if unchecked == &vec![item.clone()])
+    );
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
+    assert_eq!(report.folders.iter().map(|f| f.bytes).sum::<u64>(), 200);
+    let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let id = store
+        .properties()
+        .make_entry_id(outlook_pst::ndb::node_id::NodeId::from(item.folder.0))
+        .unwrap();
+    let folder = store.open_folder(&id).unwrap();
+    assert_eq!(folder.properties().content_count().unwrap(), 1);
+    assert_eq!(folder.contents_table().unwrap().rows_matrix().count(), 1);
+}
+#[test]
+fn unreadable_folder_skips_its_subtree_and_preserves_healthy_siblings() {
+    let mut store = source_store(vec![Item::new("IPM.Note", 90)]);
+    let subtree = &mut store.root.children[0].children[1];
+    subtree.children.push(Folder {
+        name: "Damaged".into(),
+        unreadable: true,
+        items: vec![Item::new("IPM.Note", 800)],
+        children: vec![Folder {
+            name: "Descendant".into(),
+            items: vec![Item::new("IPM.Task", 900)],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let bytes = store.build();
+    let (_f, report) = complete(&bytes, "folder-recovery");
+    assert_eq!(report.skipped.len(), 4); // Two folders, two Items, each with a local reason.
+    assert_eq!(report.folders.len(), 5);
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
+    checked(&report.evidence.unreadable, 2);
+    let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+    for part in &report.folders {
+        let id = store
+            .properties()
+            .make_entry_id(outlook_pst::ndb::node_id::NodeId::from(part.folder.0))
+            .unwrap();
+        let folder = store.open_folder(&id).unwrap();
+        assert_eq!(
+            folder.contents_table().unwrap().rows_matrix().count() as u64,
+            part.items
+        );
+        // Deleted Items is the only remaining child of IPM_SUBTREE.
+        if folder.properties().display_name().unwrap() == "IPM_SUBTREE" {
+            assert_eq!(folder.hierarchy_table().unwrap().rows_matrix().count(), 1);
+        }
+    }
+}
+#[test]
+fn validated_markers_and_external_refs_are_separate_from_unreadable_content() {
+    let mut headers = Item::new("IPM.Note", 10);
+    headers.headers_only = true;
+    headers.attachments = vec![synthetic::Attachment::External(
+        "https://example.invalid/attachment".into(),
+    )];
+    let mut unrelated = Item::new("IPM.Note", 20);
+    unrelated
+        .properties
+        .push(synthetic::Property::int(0x8001, 1));
+    let (_f, report) = complete(&source_items(vec![headers, unrelated]), "evidence");
+    checked(&report.evidence.headers_only, 1);
+    checked(&report.evidence.external_references, 1);
+    checked(&report.evidence.unreadable, 0);
+    assert!(report.skipped.is_empty());
+}
+#[test]
+fn invalid_marker_type_or_external_path_is_not_reported_as_checked_zero() {
+    let mut item = Item::new("IPM.Note", 10);
+    item.properties.push(synthetic::Property::text(0x8000, "1"));
+    item.attachments
+        .push(synthetic::Attachment::External("".into()));
+    let (f, report) = complete(&source_items(vec![item]), "invalid-evidence");
+    for evidence in [
+        &report.evidence.headers_only,
+        &report.evidence.external_references,
+    ] {
+        assert!(
+            matches!(evidence, pstoff_engine::Evidence::Incomplete { count: 0, unchecked, .. } if unchecked.len() == 1)
+        );
+    }
+    checked(&report.evidence.unreadable, 0);
+    assert!(report.skipped.is_empty());
+    let text = std::fs::read_to_string(f.root.join("out/invalid-evidence.txt")).unwrap();
+    assert!(text.contains("Not checked for 1 Items"));
+    assert!(text.contains("not missing content"));
+}
+#[test]
+fn leftover_staging_for_another_base_is_flagged_without_touching_it() {
+    let f = support::Fixture::invalid();
+    std::fs::write(&f.source, source()).unwrap();
+    let options = ConvertOptions::new(f.root.join("out"), "new".into());
+    let stale = options.destination.join(".old.pstoff-partial");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("output.pst"), b"synthetic unfinished output").unwrap();
+    let e = convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap_err();
+    assert!(matches!(e.kind, pstoff_engine::ErrorKind::Collision));
+    assert!(e.message.contains("stale or active"));
+    assert!(e.message.contains(".old.pstoff-partial"));
+    assert_eq!(
+        std::fs::read(stale.join("output.pst")).unwrap(),
+        b"synthetic unfinished output"
+    );
+    assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 1);
+}
+#[test]
+fn free_space_preflight_rejects_large_declared_output_before_staging() {
+    let f = support::Fixture::invalid();
+    let bytes = source();
+    std::fs::write(&f.source, &bytes).unwrap();
+    let mut options = ConvertOptions::new(f.root.join("out"), "too-large".into());
+    options.space_reserve_bytes = u64::MAX;
+    let e = convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap_err();
+    assert!(
+        matches!(e.kind, pstoff_engine::ErrorKind::InsufficientSpace),
+        "{e:?}"
+    );
+    assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 0);
+    assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+}
+
+#[test]
+fn damaged_nested_attachment_is_an_item_skip_not_a_store_failure() {
+    let mut inner = Item::new("IPM.Note", 10);
+    inner.unreadable = true;
+    let mut outer = Item::new("IPM.Note", 100);
+    outer
+        .attachments
+        .push(synthetic::Attachment::Embedded(Box::new(inner)));
+    let (_f, report) = complete(
+        &source_items(vec![outer, Item::new("IPM.Task", 20)]),
+        "nested-damage",
+    );
+    assert_eq!(report.skipped.len(), 1);
+    checked(&report.evidence.unreadable, 1);
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
+}
+#[test]
+fn headers_only_uses_named_property_identity_not_a_fixed_property_id() {
+    let mut item = Item::new("IPM.Note", 10);
+    item.properties.push(synthetic::Property::int(0x8123, 1));
+    let store = source_store(vec![item]);
+    let guid = [8, 0x20, 6, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46];
+    let (_f, report) = complete(
+        &store.build_with_header_identity(0x123, guid, 0x8578),
+        "remapped",
+    );
+    checked(&report.evidence.headers_only, 1);
+    let (_f, report) = complete(
+        &store.build_with_header_identity(0x123, [0x42; 16], 0x8578),
+        "unrelated-guid",
+    );
+    checked(&report.evidence.headers_only, 0);
+    let (_f, report) = complete(
+        &store.build_with_header_identity(0x123, guid, 0x8579),
+        "unrelated-lid",
+    );
+    checked(&report.evidence.headers_only, 0);
+}
+#[test]
+fn unreadable_required_folder_or_table_gets_empty_output_scaffolding() {
+    for table in [false, true] {
+        let mut store = source_store(vec![Item::new("IPM.Note", 100)]);
+        let subtree = &mut store.root.children[0].children[1];
+        subtree.unreadable = !table;
+        subtree.unreadable_table = table;
+        let (_f, report) = complete(&store.build(), "required-folder");
+        checked(&report.evidence.unreadable, 1);
+        assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 0);
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.reason.contains("scaffolding")));
+        let pst = outlook_pst::open_store(&report.files[0].path).unwrap();
+        for folder in &report.folders {
+            let id = pst
+                .properties()
+                .make_entry_id(outlook_pst::ndb::node_id::NodeId::from(folder.folder.0))
+                .unwrap();
+            let actual = pst.open_folder(&id).unwrap();
+            assert_eq!(actual.contents_table().unwrap().rows_matrix().count(), 0);
+            actual.hierarchy_table().unwrap();
+        }
+    }
+}
+
+#[test]
+fn skipped_global_item_ids_do_not_remove_local_recipient_rows() {
+    let mut damaged = Item::new("IPM.Note", 10);
+    damaged.unreadable = true;
+    let (_, first) = complete(
+        &source_items(vec![damaged, Item::new("IPM.Note", 20)]),
+        "ids",
+    );
+    let pstoff_engine::LocalRef::Item(skipped) = &first.skipped[0].reference else {
+        panic!("Item expected")
+    };
+    let mut damaged = Item::new("IPM.Note", 10);
+    damaged.unreadable = true;
+    let mut healthy = Item::new("IPM.Note", 20);
+    healthy.recipient_row_ids.push(skipped.node);
+    healthy.recipients.push(synthetic::Recipient {
+        name: "Synthetic".into(),
+        address: "fixture@example.invalid".into(),
+        kind: 1,
+    });
+    let (_f, report) = complete(&source_items(vec![damaged, healthy]), "local-ids");
+    let mut pst = pstoff_format::ndb::Pst::open(report.files[0].path.to_str().unwrap()).unwrap();
+    let item = pst.nodes().into_iter().find(|n| n.nid_type() == 4).unwrap();
+    let recipient = pst.subnodes(item.bid_sub).unwrap()[&0x692];
+    let table = pstoff_format::ltp::read_tc(&mut pst, recipient.data, recipient.sub).unwrap();
+    assert_eq!(table.rows.len(), 1);
 }

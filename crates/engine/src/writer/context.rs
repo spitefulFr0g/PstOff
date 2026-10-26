@@ -215,3 +215,31 @@ pub(super) fn pc(
     }
     heap.bth(&records, 2, 6)
 }
+
+pub(super) fn folder(name: &str, ordinary: u32, associated: u32, children: bool) -> Properties {
+    let mut cells = Properties::new();
+    cells.insert(
+        0x3001,
+        Cell {
+            kind: 0x1f,
+            bytes: name.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            subnode: None,
+        },
+    );
+    for (id, value) in [
+        (0x3602, ordinary),
+        (0x3617, associated),
+        (0x3603, 0),
+        (0x360a, u32::from(children)),
+    ] {
+        cells.insert(
+            id,
+            Cell {
+                kind: 3,
+                bytes: value.to_le_bytes().to_vec(),
+                subnode: None,
+            },
+        );
+    }
+    cells
+}

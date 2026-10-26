@@ -12,15 +12,22 @@ pub(super) fn prepare(
     nodes: &[Node],
     differences: &mut Vec<Difference>,
     cancel: &crate::CancelToken,
+    omitted: &std::collections::HashSet<u32>,
 ) -> Result<Option<BTreeMap<u32, Properties>>> {
     let mut planned = BTreeMap::new();
     let mut observations: BTreeMap<u32, Vec<(u32, bool, bool, Properties)>> = BTreeMap::new();
-    for node in nodes.iter().filter(|n| matches!(n.nid & 31, 0x0e..=0x10)) {
+    for node in nodes
+        .iter()
+        .filter(|n| n.bid_data != 0 && matches!(n.nid & 31, 0x0e..=0x10))
+    {
         if cancel.is_cancelled() {
             return Ok(None);
         }
         let table = table::read(source, node.bid_data, node.bid_sub)?;
         for (nid, _, cells) in table.rows {
+            if omitted.contains(&nid) {
+                continue;
+            }
             let item = nodes
                 .iter()
                 .find(|n| n.nid == nid && matches!(n.nid & 31, 4 | 8))

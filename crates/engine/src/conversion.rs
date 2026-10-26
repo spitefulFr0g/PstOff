@@ -39,23 +39,40 @@ pub(super) fn convert(
             "Split and exclusions require the conversion planner.",
         ));
     }
-    let inspection = reader::inspect(path)?;
+    reader::inspect(path)?;
+    let recovery = writer::recover(&mut source, &nodes, cancel)
+        .map_err(|_| failure(ErrorKind::DamagedSource, "Source recovery planning failed."))?;
+    if cancel.is_cancelled() {
+        return Ok(Conversion::Cancelled {
+            completed_files: vec![],
+        });
+    }
     let mut folders = vec![];
-    let mut pending: Vec<_> = inspection.folders.iter().collect();
-    while let Some(folder) = pending.pop() {
-        if folder.unreadable.is_some() {
-            return Err(failure(
-                ErrorKind::DamagedSource,
-                "A source folder or Item is unreadable.",
-            ));
+    for folder in recovery
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.nid_type(), 2 | 3))
+    {
+        let mut count = 0;
+        let mut bytes = 0u64;
+        for n in recovery
+            .nodes
+            .iter()
+            .filter(|n| n.nid_parent == folder.nid && matches!(n.nid_type(), 4 | 8))
+        {
+            count += 1;
+            if let Ok(pc) = reader::item_properties(&mut source, n) {
+                if let Some(pstoff_format::ltp::Value::Int(size)) = pc.props.get(&0x0e08) {
+                    bytes = bytes.saturating_add((*size).max(0) as u64);
+                }
+            }
         }
         folders.push(FolderPart {
-            folder: folder.id.clone(),
+            folder: FolderRef(folder.nid),
             part: 1,
-            items: folder.item_count,
-            bytes: folder.bytes,
+            items: count,
+            bytes,
         });
-        pending.extend(&folder.children);
     }
     let output = options
         .destination
@@ -73,6 +90,13 @@ pub(super) fn convert(
         ));
     }
     fs::create_dir_all(&options.destination).map_err(|e| failure(ErrorKind::Io, e.to_string()))?;
+    flag_staging(&options.destination)?;
+    preflight_space(
+        path,
+        &options.destination,
+        &folders,
+        options.space_reserve_bytes,
+    )?;
     let staging = options
         .destination
         .join(format!(".{}.pstoff-partial", options.base_name));
@@ -83,13 +107,20 @@ pub(super) fn convert(
     };
     let temporary = staging.join("output.pst");
     let display = path.file_stem().unwrap_or_default().to_string_lossy();
-    let total = nodes
+    let total = recovery
+        .nodes
         .iter()
         .filter(|n| matches!(n.nid_type(), 4 | 8))
         .count() as u64;
-    let Some(differences) =
-        writer::write(&mut source, &nodes, &temporary, &display, progress, cancel)
-            .map_err(|e| failure(ErrorKind::Io, e.to_string()))?
+    let Some(differences) = writer::write(
+        &mut source,
+        &recovery,
+        &temporary,
+        &display,
+        progress,
+        cancel,
+    )
+    .map_err(|e| failure(ErrorKind::Io, e.to_string()))?
     else {
         return Ok(Conversion::Cancelled {
             completed_files: vec![],
@@ -131,13 +162,9 @@ pub(super) fn convert(
             part: 1,
         }],
         folders,
-        skipped: vec![],
+        skipped: recovery.skipped,
         differences,
-        evidence: CompletenessEvidence {
-            headers_only: Evidence::NotChecked,
-            unreadable: Evidence::NotChecked,
-            external_references: Evidence::NotChecked,
-        },
+        evidence: recovery.evidence,
     };
     let json_bytes =
         serde_json::to_vec_pretty(&report).map_err(|e| failure(ErrorKind::Io, e.to_string()))?;
@@ -256,15 +283,32 @@ fn report_text(report: &ConversionReport) -> String {
             Evidence::NotChecked => {
                 let _ = writeln!(text, "{label}: Not checked");
             }
-            Evidence::Checked { count, references } => {
+            Evidence::Checked { count, references }
+            | Evidence::Incomplete {
+                count, references, ..
+            } => {
                 let _ = writeln!(text, "{label}: {count}");
+                if let Evidence::Incomplete { unchecked, .. } = evidence {
+                    let _ = writeln!(
+                        text,
+                        "  Not checked for {} Items; findings above are a lower bound.",
+                        unchecked.len()
+                    );
+                    for item in unchecked {
+                        let _ = writeln!(
+                            text,
+                            "  Not checked: {}",
+                            local_reference(&LocalRef::Item(item.clone()))
+                        );
+                    }
+                }
                 for item in references {
                     let _ = writeln!(text, "  {}", local_reference(&LocalRef::Item(item.clone())));
                 }
             }
         }
     }
-    let _ = writeln!(text, "Skipped: {}", report.skipped.len());
+    let _ = writeln!(text, "External references describe stored references, not missing content. Targets are not contacted or checked.\nSkipped: {}", report.skipped.len());
     for skipped in &report.skipped {
         let _ = writeln!(
             text,
@@ -297,4 +341,72 @@ fn local_reference(reference: &LocalRef) -> String {
         LocalRef::Folder(folder) => format!("Folder 0x{:x}", folder.0),
         LocalRef::Item(item) => format!("Folder 0x{:x}, Item 0x{:x}", item.folder.0, item.node),
     }
+}
+
+// Never delete a directory that could belong to a concurrent or crashed run.
+// Flag all reserved staging names, including a different output base name.
+fn flag_staging(destination: &Path) -> Result<(), EngineError> {
+    for entry in fs::read_dir(destination).map_err(io_failure)? {
+        let entry = entry.map_err(io_failure)?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') && name.ends_with(".pstoff-partial") {
+            return Err(failure(ErrorKind::Collision, format!(
+                "Possible stale or active PstOff staging path: {}. Review it before retrying; it has been left untouched.", entry.path().display())));
+        }
+    }
+    Ok(())
+}
+fn preflight_space(
+    source: &Path,
+    destination: &Path,
+    folders: &[FolderPart],
+    reserve: u64,
+) -> Result<(), EngineError> {
+    // Source bytes account for properties/attachments not represented by message
+    // sizes. Doubling plus 64 MiB reserves room for format expansion and reports.
+    // This is a conservative estimate, not a guarantee against later disk changes.
+    let declared = folders
+        .iter()
+        .fold(0u64, |sum, f| sum.saturating_add(f.bytes));
+    let required = fs::metadata(source)
+        .map_err(io_failure)?
+        .len()
+        .max(declared)
+        .saturating_mul(2)
+        .saturating_add(reserve);
+    let available = available_space(destination).map_err(io_failure)?;
+    if available < required {
+        return Err(failure(ErrorKind::InsufficientSpace, format!(
+            "Not enough destination space: {required} bytes estimated, {available} bytes available.")));
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn available_space(path: &Path) -> std::io::Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let path = fs::canonicalize(path)?;
+    let wide: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0;
+    // NUL terminated directory path and valid output pointer; other outputs unused.
+    if unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(available)
+    }
+}
+#[cfg(not(windows))]
+fn available_space(_: &Path) -> std::io::Result<u64> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Conversion requires Windows disk preflight.",
+    ))
 }

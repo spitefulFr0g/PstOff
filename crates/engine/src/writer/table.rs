@@ -398,3 +398,34 @@ impl Table {
         heap.alloc(&info)
     }
 }
+
+pub(super) fn empty(rows: Vec<u32>) -> Table {
+    let mut table = Table {
+        columns: vec![(0x67f20003, 4), (0x67f30003, 4)],
+        pair_cache: false,
+        time_cache: false,
+        rows: vec![],
+    };
+    for id in rows {
+        table.add_identity_row(id);
+    }
+    table
+}
+impl Table {
+    pub(super) fn add_identity_row(&mut self, id: u32) {
+        let cells = [(0x67f20003, id), (0x67f30003, 1)]
+            .into_iter()
+            .map(|(tag, value)| {
+                (
+                    tag,
+                    Cell {
+                        kind: 3,
+                        bytes: value.to_le_bytes().to_vec(),
+                        subnode: None,
+                    },
+                )
+            })
+            .collect();
+        self.rows.push((id, 1, cells));
+    }
+}
