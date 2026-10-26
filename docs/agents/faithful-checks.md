@@ -5,7 +5,7 @@ A Conversion is **Faithful** (see `GLOSSARY.md`) when all three checks below pas
 ## 1. SCANPST, scan-only
 
 ```bash
-scripts/scanpst-check.py out.pst
+python scripts/scanpst-check.py out.pst
 ```
 
 The script copies the PST to Windows temp and runs `SCANPST.EXE -silent -no repair` on the copy. It prints one JSON line. It exits 0 for **PASS**: the scan finished, the log reports zero diagnostic lines, and neither file changed. It exits 1 for FAIL and 2 when the check couldn't run.
@@ -16,9 +16,12 @@ Run the controls whenever the script or SCANPST changes:
 
 ## 2. libpff comparison
 
+Run it in WSL against the Windows checkout (`docs/agents/environment.md`):
+
 ```bash
-scripts/libpff-check.py compare source.ost out.pst   # exit 0: only explained differences
-scripts/libpff-check.py tree out.pst                 # folder tree with message counts
+libpff="wsl.exe -d Debian -- python3 /mnt/c/Users/spitefulfr0g/dev/PstOff/scripts/libpff-check.py"
+MSYS_NO_PATHCONV=1 $libpff compare /mnt/c/<source.ost> /mnt/c/<out.pst>   # exit 0: only explained differences
+MSYS_NO_PATHCONV=1 $libpff tree /mnt/c/<out.pst>                         # folder tree with message counts
 ```
 
 `compare` reads every reachable property from both files with libpff, an independent reader. It fails on any difference outside the allowed list, on a changed object graph, and on any reader error. The allowed list lives in the script, which keeps it in one place; change it there only after a decision on #11.

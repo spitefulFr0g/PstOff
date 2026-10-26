@@ -5,7 +5,7 @@
 
 See docs/agents/faithful-checks.md.
 """
-import argparse, hashlib, json, subprocess, sys, uuid
+import argparse, hashlib, json, os, subprocess, sys, uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -17,6 +17,8 @@ def sha256(path):
 
 
 def winpath(path):
+    if os.name == 'nt':
+        return str(path)
     return subprocess.run(['wslpath', '-w', str(path)], check=True, capture_output=True, text=True).stdout.strip()
 
 
