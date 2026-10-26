@@ -39,15 +39,18 @@ pub(super) fn convert(
     }
     reader::inspect(path)?;
     let excluded = planner::excluded(&nodes, &options.exclusions)?;
-    let recovery = writer::recover(&mut source, &nodes, cancel)
-        .map_err(|_| failure(ErrorKind::DamagedSource, "Source recovery planning failed."))?;
+    let recovery = writer::recover(&mut source, &nodes, cancel).map_err(|error| {
+        failure(
+            ErrorKind::DamagedSource,
+            format!("Source recovery planning failed: {error}"),
+        )
+    })?;
     if cancel.is_cancelled() {
         return Ok(Conversion::Cancelled {
             completed_files: vec![],
         });
     }
-    let selection = planner::Selection::new(&mut source, recovery, excluded)
-        .map_err(|_| failure(ErrorKind::DamagedSource, "Source folder selection failed."))?;
+    let selection = planner::Selection::new(recovery, excluded);
     let split = matches!(options.split, Split::Bytes(_));
     let output_path = |part| {
         options.destination.join(if split {

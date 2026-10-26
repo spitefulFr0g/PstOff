@@ -11,8 +11,9 @@ is established. No published part exceeds the limit. Split Off keeps the origina
 single-file naming. Empty selections retain the required system folder shells;
 a limit smaller than those shells returns InvalidOptions.
 
-Part selection retains populated folders, ancestors and the five required store
-folders. Removed global table references are filtered; nested Item subnodes are
+Part selection retains populated folders, ancestors and the resolved required
+store folders (see [source folder identity](source-folder-identity.md)). Removed
+global table references are filtered; nested Item subnodes are
 kept whole. Folder properties and hierarchy count caches reflect each part.
 Exclusions cascade to descendants, remove their Items from progress totals,
 folder mappings, skipped records and completeness evidence, and keep required

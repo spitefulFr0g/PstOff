@@ -13,7 +13,7 @@ use pstoff_gui::{Engine, RealEngine};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use synthetic::{Folder, Item, Store};
+use synthetic::{Folder, Item, Store, SystemFolder};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -77,7 +77,7 @@ fn notes(n: u32, size: u32) -> Vec<Item> {
 /// Root → Root - Mailbox → {Finder, IPM_SUBTREE → {Inbox → Projects, Sent Items,
 /// Deleted Items}}. The writer needs Finder and Deleted Items.
 pub fn mailbox() -> Vec<u8> {
-    Store {
+    let mut store = Store {
         root: folder(
             "Root",
             vec![],
@@ -102,15 +102,19 @@ pub fn mailbox() -> Vec<u8> {
                 ],
             )],
         ),
-    }
-    .build()
+    };
+    store.root.children[0].children[0].role = Some(SystemFolder::Finder);
+    let subtree = &mut store.root.children[0].children[1];
+    subtree.role = Some(SystemFolder::IpmSubtree);
+    subtree.children[2].role = Some(SystemFolder::Wastebasket);
+    store.build()
 }
 
 /// A mailbox with one folder whose table can't be read.
 pub fn damaged_folder() -> Vec<u8> {
     let mut broken = folder("Broken", notes(1, 100), vec![]);
     broken.unreadable = true;
-    Store {
+    let mut store = Store {
         root: folder(
             "Root",
             vec![],
@@ -120,8 +124,9 @@ pub fn damaged_folder() -> Vec<u8> {
                 vec![folder("IPM_SUBTREE", vec![], vec![broken])],
             )],
         ),
-    }
-    .build()
+    };
+    store.root.children[0].children[0].role = Some(SystemFolder::IpmSubtree);
+    store.build()
 }
 
 fn put16(b: &mut [u8], at: usize, n: u16) {

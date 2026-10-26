@@ -31,13 +31,16 @@ impl Fixture {
                     children: vec![
                         Folder {
                             name: "Finder".into(),
+                            role: Some(synthetic::SystemFolder::Finder),
                             ..Default::default()
                         },
                         Folder {
                             name: "IPM_SUBTREE".into(),
+                            role: Some(synthetic::SystemFolder::IpmSubtree),
                             items,
                             children: vec![Folder {
                                 name: "Deleted Items".into(),
+                                role: Some(synthetic::SystemFolder::Wastebasket),
                                 ..Default::default()
                             }],
                             ..Default::default()
