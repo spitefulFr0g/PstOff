@@ -22,7 +22,7 @@ Agents can drive Windows apps (Outlook, the PstOff GUI) through Codex's native c
 - Input goes through the user's real mouse and keyboard, so tell the user before a run.
 - Keep screenshots under `.scratch/`.
 
-Whether computer use may replace the manual Outlook check awaits an ADR. Until then that check stays manual (`docs/agents/faithful-checks.md`).
+The Outlook open check is a script, `scripts/outlook-check.py`, that drives Outlook through UI Automation on its own; it isn't agent computer use. These guardrails still apply to it (`docs/agents/faithful-checks.md`).
 
 ## Smoke test
 

@@ -28,4 +28,4 @@ To drive a Windows app (Outlook, the PstOff GUI), read `docs/agents/computer-use
 
 ## Faithful checks
 
-To check whether a converted PST is **Faithful** (SCANPST, the libpff comparison and the manual Outlook check), see `docs/agents/faithful-checks.md`.
+To check whether a converted PST is **Faithful** (SCANPST, the libpff comparison and the Outlook open check), see `docs/agents/faithful-checks.md`.

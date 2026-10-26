@@ -30,13 +30,28 @@ Coverage is the reachable property graph only. It doesn't cover table contents, 
 
 The reader is Debian's libpff packages, extracted and never installed, and it always runs under `bwrap`. Its root is `~/.local/share/pstoff-independent-reader/root`; override it with `PSTOFF_LIBPFF_ROOT`. Package hashes are in `provenance.json` beside it.
 
-## 3. Opens in classic Outlook (manual)
+## 3. Opens in classic Outlook
 
-Outlook automation (`AddStoreEx`) hangs on every PST, so the user does this check by hand ([issue #18](https://github.com/spitefulFr0g/PstOff/issues/18)).
+```bash
+python scripts/outlook-check.py out.pst --user-notified [--expect-sender "Microsoft Outlook"]
+```
 
-1. Clear the check folder `C:\Users\spitefulfr0g\PstOff-outlook-check\` down to `1-known-good-Empty.pst`. Then copy in the one candidate to check. Every PST opens under the same name in Outlook, so an older candidate left in the folder is easy to mistake for the new one.
-2. Hand the user a copy, never the original output, because Outlook writes to every file it opens.
-3. Ask the user to open it via **File → Open & Export → Open Outlook Data File**. They then check the folders and the message list, including the sender column, and open one message.
-4. Ask them to close the data file afterwards.
+The script drives this machine's classic Outlook through Windows UI Automation, using only the UIAutomationClient assemblies built into Windows. It never uses the Outlook object model, because `AddStoreEx` hangs on every PST ([issue #18](https://github.com/spitefulFr0g/PstOff/issues/18)). It prints one JSON line. It exits 0 for **PASS**, 1 for FAIL and 2 when the check couldn't run.
 
-This machine's Outlook is unlicensed and had to be activated before 2026-10-26. If it has gone view-only, tell the user the check needs another Windows setup.
+What it does:
+1. Refuses files under `testdata/private/`. Refuses to start if Outlook is already open or the `PstOffValidation` profile is missing.
+2. Copies the PST into the check folder `C:\Users\spitefulfr0g\PstOff-outlook-check\` under a unique name. Outlook writes to every file it opens, so it only ever sees the copy, which is deleted afterwards.
+3. Starts `outlook.exe /profile PstOffValidation`, the account-free profile from #7, and nothing else. The default `Outlook` profile holds the user's mailbox.
+4. Opens the copy via **File → Open & Export → Open Outlook Data File**. Then it reads the folder list and the sender column of every folder's message list, and opens one message.
+5. Closes the data file and Outlook.
+
+**PASS** needs the data file to open, the standard folders (`Deleted Items` by default; change with `--expect-folder`), a readable sender in every listed row, and one message that opens with a body. A sender that is empty, holds a replacement or control character, or shows a message class such as `IPM.Note` is a FAIL. That is what the pre-Q16 output showed (#18). `--expect-sender` also requires every row to show that sender.
+
+A hung Outlook is killed after `--timeout` seconds (default 300), and so is one that won't close. Both exit 2, never PASS. The JSON line's `ReducedFunctionality` says whether Outlook showed its unlicensed or reduced-functionality state. This machine's Outlook is unlicensed and had to be activated before 2026-10-26. If it has gone view-only, tell the user the check needs another Windows setup.
+
+The check uses the user's real desktop, mouse and keyboard, so the guardrails in `docs/agents/computer-use.md` apply. Tell the user before a run, then pass `--user-notified`. Without it the script refuses.
+
+Run the controls whenever the script or Outlook changes:
+- Microsoft's `Empty.pst` must PASS with the standard folder set.
+- The passing #17 output (SHA256 `1a0919f5…bb7b`) must PASS with `--expect-sender "Microsoft Outlook"`.
+- The pre-Q16 spike output, with aliased contents-table cells, must FAIL on its garbled sender column.
