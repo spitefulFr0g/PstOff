@@ -10,7 +10,7 @@ Hard rules for every agent working in this repo, including delegated ones. They 
 ## Third-party code
 
 - Downloaded files are untrusted. Give each download its own new directory under the Windows temp folder (`$TEMP`), keep your own scripts elsewhere, and never execute what you downloaded.
-- Build, test and run PstOff only inside **Windows Sandbox**, from the very first build. Crate build scripts and proc macros are third-party code, and so is every binary they produce. The guest has networking and the clipboard off. Source, crate cache, Rust toolchain, MSVC and the Windows SDK are mapped read-only. Only the build output folder is writable. Run `cargo fetch` on the host first: it downloads crates and writes `Cargo.lock` without running crate code. `docs/agents/environment.md` says where the route's parts live.
+- Build, test and run PstOff only through `python scripts/sandbox-cargo.py <cargo args>` or `python scripts/check`, inside **Windows Sandbox**, from the very first build. Crate build scripts and proc macros are third-party code, and so is every binary they produce. The guest has networking and the clipboard off. Source, crate cache, Rust toolchain, MSVC and the Windows SDK are mapped read-only. Only the build output folder is writable. The wrapper runs `cargo fetch --locked` on the host first; this downloads crates without running crate code. Do not run other Cargo commands on the host. `docs/agents/environment.md` says where the route's parts live.
 - Windows runs one Sandbox at a time. Before launching one, check that none is running. A Sandbox you didn't start belongs to the user or another agent, so leave it and ask.
 - libpff is the one Linux-only tool. Run it in WSL through `scripts/libpff-check.py`, which wraps it in `bwrap`.
 

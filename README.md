@@ -7,27 +7,23 @@ and `convert` currently return `NotImplemented`, except pre-cancelled work.
 
 ## Prepare and check
 
-Install Rust 1.82 or newer with `rustfmt` and `clippy`, and Linux `bubblewrap`.
-Use a toolchain that supports the committed lockfile's dependencies (the
-foundation was checked with Rust 1.99.1). From this repository:
+Use the Windows Sandbox toolchain and mappings described in
+[`docs/agents/environment.md`](docs/agents/environment.md). From this repository:
 
-```sh
-CARGO_HTTP_USER_AGENT='PstOff-research (https://github.com/spitefulFr0g/PstOff)' cargo fetch --locked
-scripts/check
+```powershell
+python scripts/check
 ```
 
-Fetch downloads dependencies without executing crate code. Every build and
-test, including the first one, must use `scripts/cargo-sandboxed`; it removes
-network and home access, mounts source read-only and permits only target and
-temporary writes. Use host `rustfmt` to apply formatting; the sandbox runs its
-read-only check. `scripts/check` checks dependency licenses/pins, formatting, Clippy and engine/CLI/GUI
-skeleton tests. It does not execute the imported fork's upstream tests or
-build GPUI. It is the maintained Linux CI entry point. A missing sandbox,
-component, dependency, or user namespace is a failure, never a skipped check.
+Every Cargo command, including the first build and test, goes through the
+Windows Sandbox wrapper. It fetches locked dependencies on the host without
+running crate code, then maps the source, dependency cache and toolchain
+read-only into the guest. `scripts/check` checks dependency licenses/pins,
+formatting, Clippy and engine/CLI/GUI skeleton tests. It does not execute the
+imported fork's upstream tests or build GPUI.
 
-```sh
-scripts/cargo-sandboxed test --locked -p pstoff-engine
-scripts/cargo-sandboxed run --locked -p pstoff-cli
+```powershell
+python scripts/sandbox-cargo.py test --locked -p pstoff-engine
+python scripts/sandbox-cargo.py run --locked -p pstoff-cli
 ```
 
 Windows builds need explicit permission under [safety](docs/agents/safety.md).

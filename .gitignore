@@ -8,3 +8,7 @@ testdata/private/
 
 # Local agent scratch: run notes, logs and screenshots
 /.scratch/
+
+# Python test and wrapper bytecode
+__pycache__/
+*.py[cod]

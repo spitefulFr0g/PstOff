@@ -8,7 +8,7 @@ PstOff is built and released for Windows only ([#43](https://github.com/spiteful
 - Agent shells are Git Bash and PowerShell. Python is `python` (3.11), so run repo scripts as `python scripts/<name>.py`.
 - Authenticate `gh` on this host with `gh auth login`. The push command in `docs/agents/safety.md` depends on it.
 
-## WSL Debian (legacy)
+## WSL Debian (libpff only)
 
 WSL (user `watermelon`) no longer hosts development. It keeps three things:
 
@@ -22,10 +22,8 @@ WSL (user `watermelon`) no longer hosts development. It keeps three things:
 
 ## Windows Sandbox build route
 
-The rules are in `docs/agents/safety.md`. The parts on this machine:
+The rules are in `docs/agents/safety.md`. Run Cargo through `python scripts/sandbox-cargo.py <cargo args>`; run the full audit, fmt, clippy and test suite through `python scripts/check`. Use `python scripts/sandbox-cargo.py --probe` to verify guest networking is disabled and the source map rejects writes. The wrapper stages each worktree snapshot under `%TEMP%`, keeps a separate persistent target directory per worktree, and serializes Sandbox sessions with a host lock. Its Cargo cache is shared under `%TEMP%`. The parts on this machine:
 
 - Rust stable MSVC, installed inside a guest and mapped read-only: `%TEMP%\PstOffRustInstall-8zzvegc3\install`.
 - MSVC from Visual Studio 2022 Community (14.44.35207) and Windows SDK 10.0.26100.0, mapped read-only from their install folders.
-- Verified guest configs from the first run: `.scratch/spec-notes-20/logs/gui-spike-attempt-6/final-build.wsb` with `final-input/build.cmd` for builds, and `runtime.wsb` for smoke runs.
-
-Ticket #37 replaces these with a maintained wrapper script.
+- The wrapper uses MSVC 14.44.35207 and SDK 10.0.26100.0 from those paths. GUI launches and screenshot smoke runs stay in #37.

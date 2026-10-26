@@ -1,9 +1,14 @@
-#!/usr/bin/env bash
-# Maintained Linux full checks. Dependencies must already be fetched.
-set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
-scripts/cargo-sandboxed metadata --locked --format-version 1 | python3 scripts/audit-dependencies.py
-# Do not format/lint the preserved upstream fork, or run upstream fixture tests.
-scripts/cargo-sandboxed fmt -p pstoff-engine -p pstoff-cli -p pstoff-gui -- --check
-scripts/cargo-sandboxed clippy --locked -p pstoff-engine -p pstoff-cli -p pstoff-gui --all-targets -- -D warnings
-scripts/cargo-sandboxed test --locked -p pstoff-engine -p pstoff-cli -p pstoff-gui
+#!/usr/bin/env python3
+"""Run audit, formatting, lint and tests in one Windows Sandbox session."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parent.parent
+raise SystemExit(
+    subprocess.run(
+        [sys.executable, str(root / "scripts" / "sandbox-cargo.py"), "--check"],
+        cwd=root,
+    ).returncode
+)
