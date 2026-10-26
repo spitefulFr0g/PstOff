@@ -127,11 +127,14 @@ pub(super) fn convert(
                 &mut sink,
                 cancel,
             )
-            .map_err(|_| {
-                failure(
+            .map_err(|error| match error.downcast::<EngineError>() {
+                Ok(error) => *error,
+                Err(error) => failure(
                     ErrorKind::Io,
-                    "Could not finalize a PST part; unfinished output was removed.",
-                )
+                    format!(
+                        "Could not finalize a PST part; unfinished output was removed: {error}"
+                    ),
+                ),
             })?
             else {
                 return Ok(None);
@@ -181,6 +184,11 @@ pub(super) fn convert(
             let output = output_path(part);
             let bytes = fs::metadata(&accepted).map_err(io_failure)?.len();
             rename_new(&accepted, &output).map_err(io_failure)?;
+            // An unsplit PST and its reports form one successful Conversion.
+            // Finished split parts remain useful if a later part/report fails.
+            if !split {
+                cleanup.published.push(output.clone());
+            }
             files.push(OutputFile {
                 path: output,
                 bytes,
@@ -223,6 +231,9 @@ pub(super) fn convert(
     })();
     match result {
         Err(mut error) => {
+            if !split {
+                files.clear();
+            }
             error.completed_files = files;
             Err(error)
         }

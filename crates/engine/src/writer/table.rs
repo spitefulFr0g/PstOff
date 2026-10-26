@@ -132,11 +132,11 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             return Err("Aliased or cyclic table index".into());
         }
         let data = heap.item(hid)?;
-        if data.len() % 8 != 0 {
+        if !data.len().is_multiple_of(8) {
             return Err("Truncated table row index".into());
         }
         let mut previous = None;
-        for record in data.chunks_exact(8) {
+        for record in data.as_chunks::<8>().0 {
             let key = u32at(record, 0)?;
             if previous.is_some_and(|p| p >= key) {
                 return Err("Unsorted table index".into());
@@ -247,6 +247,9 @@ impl Table {
                 } else if *tag == 0x66280014 && previous.is_some() {
                     cells.remove(tag);
                     "Q17: omit undocumented table-only cell without an exact Item property."
+                } else if previous.is_some() {
+                    cells.remove(tag);
+                    "Q16: omit untrusted cached cell because the Item has no exact property tag (missing or different type)."
                 } else {
                     continue;
                 };

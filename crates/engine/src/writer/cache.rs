@@ -83,24 +83,32 @@ pub(super) fn prepare(
         }
         if let Some(rows) = observations.get(&node.nid) {
             let pairs: Vec<_> = rows.iter().filter(|(_, pair, _, _)| *pair).collect();
-            if let Some((_, _, _, first)) = pairs.first() {
+            if let Some((first_table, _, _, first)) = pairs.first() {
+                // Keep diagnostics local: identity, table and property tags,
+                // never cache payloads, subjects or addresses.
+                let diagnostic = |problem: &str, table: u32, id: u16| {
+                    format!(
+                        "Q15 {problem} for Folder 0x{:x}, Item 0x{:x}, property 0x{id:04x}0102 in contents table 0x{table:x}; no cache value chosen. Review this Item's cache occurrences and property context before retrying.",
+                        node.nid_parent, node.nid
+                    )
+                };
                 let key = first
                     .get(&0x65e2)
-                    .ok_or_else(|| format!("Q15 missing ChangeKey for Item 0x{:x}", node.nid))?;
+                    .ok_or_else(|| diagnostic("missing ChangeKey", *first_table, 0x65e2))?;
                 let pcl = first
                     .get(&0x65e3)
-                    .ok_or_else(|| format!("Q15 missing PCL for Item 0x{:x}", node.nid))?;
+                    .ok_or_else(|| diagnostic("missing PCL", *first_table, 0x65e3))?;
                 if key.kind != 0x102
                     || pcl.kind != 0x102
                     || !consistent_pair(&key.bytes, &pcl.bytes)
                 {
-                    return Err(format!("Q15 invalid pair for Item 0x{:x}", node.nid).into());
+                    return Err(diagnostic("invalid XID/PCL pair", *first_table, 0x65e2).into());
                 }
-                for (_, _, _, cells) in &pairs {
+                for (table, _, _, cells) in &pairs {
                     for id in [0x65e2, 0x65e3] {
-                        let value = cells.get(&id).ok_or_else(|| {
-                            format!("Q15 missing pair member for Item 0x{:x}", node.nid)
-                        })?;
+                        let value = cells
+                            .get(&id)
+                            .ok_or_else(|| diagnostic("missing pair member", *table, id))?;
                         let expected = &first[&id];
                         if value.kind != expected.kind
                             || value.bytes != expected.bytes
@@ -108,7 +116,12 @@ pub(super) fn prepare(
                                 v.kind != expected.kind || v.bytes != expected.bytes
                             })
                         {
-                            return Err(format!("Q15 conflict for Item 0x{:x}", node.nid).into());
+                            return Err(diagnostic(
+                                "conflict with another occurrence or Item property",
+                                *table,
+                                id,
+                            )
+                            .into());
                         }
                     }
                 }

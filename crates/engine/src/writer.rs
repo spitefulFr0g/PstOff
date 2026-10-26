@@ -61,9 +61,9 @@ impl Output {
         loop {
             let section = (at.saturating_sub(AMAP)) / INTERVAL;
             let base = AMAP + section * INTERVAL;
-            let pmap = section % 8 == 0;
-            let fmap = pmap && section >= 128 && (section - 128) % 496 == 0;
-            let fpmap = pmap && section >= 8192 && (section - 8192) % 496 == 0;
+            let pmap = section.is_multiple_of(8);
+            let fmap = pmap && section >= 128 && (section - 128).is_multiple_of(496);
+            let fpmap = pmap && section >= 8192 && (section - 8192).is_multiple_of(496);
             let slots = 1 + u64::from(pmap) + u64::from(fmap) + u64::from(fpmap);
             if at < base + slots * 512 {
                 at = base + slots * 512;
@@ -426,7 +426,15 @@ pub(super) fn write(
         return Ok(None);
     }
     let (store_cells, mut differences) = store::prepare(source, nodes, display, &recovery.created)?;
-    let Some(planned) = cache::prepare(source, nodes, &mut differences, cancel, omitted)? else {
+    let Some(planned) =
+        cache::prepare(source, nodes, &mut differences, cancel, omitted).map_err(|error| {
+            crate::EngineError {
+                kind: crate::ErrorKind::DamagedSource,
+                message: format!("Source cache planning failed: {error}"),
+                completed_files: vec![],
+            }
+        })?
+    else {
         return Ok(None);
     };
     let file = std::fs::OpenOptions::new()

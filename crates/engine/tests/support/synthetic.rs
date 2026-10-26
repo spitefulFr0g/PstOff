@@ -23,6 +23,7 @@ pub struct Item {
     pub attachments: Vec<Attachment>,
     pub headers_only: bool,
     pub cached: Vec<Property>,
+    pub associated: bool,
     pub unreadable: bool,
 }
 impl Item {
@@ -39,6 +40,7 @@ pub struct Property {
     pub id: u16,
     pub kind: u16,
     pub bytes: Vec<u8>,
+    pub table_root_alias: bool,
 }
 impl Property {
     pub fn text(id: u16, text: &str) -> Self {
@@ -46,6 +48,7 @@ impl Property {
             id,
             kind: 0x1f,
             bytes: unicode(text),
+            table_root_alias: false,
         }
     }
     pub fn binary(id: u16, bytes: Vec<u8>) -> Self {
@@ -53,6 +56,7 @@ impl Property {
             id,
             kind: 0x102,
             bytes,
+            table_root_alias: false,
         }
     }
     pub fn time(id: u16, ticks: u64) -> Self {
@@ -60,6 +64,7 @@ impl Property {
             id,
             kind: 0x40,
             bytes: ticks.to_le_bytes().to_vec(),
+            table_root_alias: false,
         }
     }
     pub fn int(id: u16, value: u32) -> Self {
@@ -67,6 +72,7 @@ impl Property {
             id,
             kind: 3,
             bytes: value.to_le_bytes().to_vec(),
+            table_root_alias: false,
         }
     }
 }
@@ -356,6 +362,7 @@ impl Writer {
                         id: 0x3701,
                         kind: 0xd,
                         bytes: object,
+                        table_root_alias: false,
                     });
                 }
             }
@@ -380,20 +387,31 @@ impl Writer {
             if parent == 0 { nid } else { parent },
             &[
                 Property::text(0x3001, &folder.name),
-                Property::int(0x3602, folder.items.len() as u32),
+                Property::int(
+                    0x3602,
+                    folder.items.iter().filter(|i| !i.associated).count() as u32,
+                ),
                 Property::int(0x3603, 0),
                 Property::int(0x360a, u32::from(!folder.children.is_empty())),
-                Property::int(0x3617, 0),
+                Property::int(
+                    0x3617,
+                    folder.items.iter().filter(|i| i.associated).count() as u32,
+                ),
             ],
         );
         if folder.unreadable {
             self.unreadable(self.nodes[&nid].1);
         }
         let mut items = Vec::new();
+        let mut associated = Vec::new();
         for item in &folder.items {
-            let id = *next | 4;
+            let id = *next | if item.associated { 8 } else { 4 };
             *next += 32;
-            items.push((id, item.cached.clone()));
+            if item.associated {
+                associated.push((id, item.cached.clone()));
+            } else {
+                items.push((id, item.cached.clone()));
+            }
             let (data, sub) = self.item(item);
             self.nodes.insert(id, (nid, data, sub));
         }
@@ -402,7 +420,7 @@ impl Writer {
             .iter()
             .map(|child| (self.folder(child, nid, next), vec![]))
             .collect();
-        for (kind, rows) in [(0xd, &children), (0xe, &items), (0xf, &vec![])] {
+        for (kind, rows) in [(0xd, &children), (0xe, &items), (0xf, &associated)] {
             let data = self.table(rows);
             if folder.unreadable_table && kind == 0xe {
                 self.unreadable(data);
@@ -487,7 +505,14 @@ impl Writer {
             for (bit, (id, kind)) in columns.iter().copied().enumerate() {
                 if let Some(bytes) = values.get(&id) {
                     let cell = match kind {
-                        0x1e | 0x1f | 0x102 | 0xd => h.alloc(bytes.clone()).to_le_bytes().to_vec(),
+                        0x1e | 0x1f | 0x102 | 0xd => {
+                            let hid = if cells.iter().any(|p| p.id == id && p.table_root_alias) {
+                                info_id
+                            } else {
+                                h.alloc(bytes.clone())
+                            };
+                            hid.to_le_bytes().to_vec()
+                        }
                         _ => bytes.clone(),
                     };
                     assert_eq!(cell.len(), width(kind));

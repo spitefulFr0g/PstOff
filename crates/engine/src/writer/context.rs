@@ -142,7 +142,7 @@ impl HeapBuilder {
     pub fn finish(mut self, root: u32) -> Vec<Vec<u8>> {
         for (i, page) in self.pages.iter_mut().enumerate() {
             let end = page.len();
-            if end % 2 != 0 {
+            if !end.is_multiple_of(2) {
                 page.push(0);
             }
             let map = page.len();

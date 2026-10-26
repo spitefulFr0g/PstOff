@@ -313,8 +313,8 @@ fn all_item_classes_and_short_non_final_streams_round_trip_with_valid_totals() {
         }
         let count = u16::from_le_bytes(data[2..4].try_into().unwrap()) as usize;
         let mut total = 0;
-        for (i, entry) in data[8..8 + count * 8].chunks_exact(8).enumerate() {
-            let child = u64::from_le_bytes(entry.try_into().unwrap());
+        for (i, entry) in data[8..8 + count * 8].as_chunks::<8>().0.iter().enumerate() {
+            let child = u64::from_le_bytes(*entry);
             let length = output.block(child).unwrap().len();
             if i + 1 < count && length < 8176 {
                 short_non_final += 1;
@@ -964,4 +964,489 @@ fn later_split_name_collision_preserves_finished_parts_and_existing_file() {
     outlook_pst::open_store(&error.completed_files[0].path).unwrap();
     assert_eq!(std::fs::read_dir(destination).unwrap().count(), 2);
     assert_source_hash(&f, &hash);
+}
+
+// Decode values with Microsoft's reader, including the existence bitmap and
+// heap/subnode references. Row counts alone do not establish cache fidelity.
+type IndependentProperties =
+    std::collections::BTreeMap<u16, outlook_pst::ltp::prop_context::PropertyValue>;
+fn independent_rows(
+    table: &dyn outlook_pst::ltp::table_context::TableContext,
+) -> Vec<(u32, IndependentProperties)> {
+    table
+        .rows_matrix()
+        .map(|row| {
+            let cells = row.columns(table.context()).unwrap();
+            let values = table
+                .context()
+                .columns()
+                .iter()
+                .zip(cells)
+                .filter_map(|(column, cell)| {
+                    cell.map(|cell| {
+                        (
+                            column.prop_id(),
+                            table.read_column(&cell, column.prop_type()).unwrap(),
+                        )
+                    })
+                })
+                .collect();
+            (u32::from(row.id()), values)
+        })
+        .collect()
+}
+
+#[test]
+fn q16_aliased_cells_require_an_exact_item_property_in_normal_and_associated_tables() {
+    use outlook_pst::ltp::prop_context::PropertyValue;
+    use synthetic::Property;
+    for associated in [false, true] {
+        // A corrupt contents cell refers to the TCINFO allocation itself.
+        let mut alias = Property::text(0x0c1a, "");
+        alias.table_root_alias = true;
+        let mut missing = Item::new("IPM.Note", 10);
+        missing.cached.push(alias.clone());
+        let mut table_only = Property::time(0x6628, 42);
+        table_only.kind = 0x14;
+        missing.cached.push(table_only);
+        let mut wrong_type = Item::new("IPM.Note", 20);
+        wrong_type
+            .properties
+            .push(Property::binary(0x0c1a, vec![0x42; 8]));
+        wrong_type.cached.push(alias.clone());
+        let mut exact = Item::new("IPM.Note", 30);
+        exact
+            .properties
+            .push(Property::text(0x0c1a, "Generated sender"));
+        exact.cached.push(alias);
+        let mut items = vec![missing, wrong_type, exact];
+        for item in &mut items {
+            item.associated = associated;
+        }
+        let bytes = source_items(items);
+        let (_f, report) = complete(&bytes, "aliased-cache");
+        assert!(report.skipped.is_empty());
+        let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+        let folder = report.folders.iter().find(|f| f.items == 3).unwrap();
+        let id = store
+            .properties()
+            .make_entry_id(folder.folder.0.into())
+            .unwrap();
+        let folder = store.open_folder(&id).unwrap();
+        let table = if associated {
+            folder.associated_table()
+        } else {
+            folder.contents_table()
+        }
+        .unwrap();
+        let rows = independent_rows(table.as_ref());
+        assert_eq!(rows.len(), 3);
+        for (index, (nid, cells)) in rows.iter().enumerate() {
+            assert!(cells.contains_key(&0x67f2));
+            assert!(cells.contains_key(&0x67f3));
+            if index < 2 {
+                assert!(
+                    !cells.contains_key(&0x0c1a),
+                    "untrusted cached sender retained"
+                );
+            } else {
+                let Some(PropertyValue::Unicode(value)) = cells.get(&0x0c1a) else {
+                    panic!("missing exact sender")
+                };
+                assert_eq!(value.to_string(), "Generated sender");
+            }
+            assert!(!cells.contains_key(&0x6628));
+            for id in [0x0e30, 0x0e33, 0x0e34, 0x0e3d, 0x0e3c, 0x0e38] {
+                assert!(!cells.contains_key(&id), "invented default cell");
+            }
+            let difference = report
+                .differences
+                .iter()
+                .find(|d| {
+                    d.property == 0x0c1a001f && d.item.as_ref().is_some_and(|i| i.node == *nid)
+                })
+                .unwrap();
+            assert!(difference.source.contains("Contents table 0x"));
+            assert!(difference.reason.contains(if index < 2 {
+                "no exact property tag"
+            } else {
+                "rebuilt"
+            }));
+        }
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.property == 0x66280014 && d.reason.contains("Q17")));
+    }
+}
+
+fn cache_pair(counter: u8) -> Vec<synthetic::Property> {
+    let mut key = vec![0x23; 16];
+    key.extend([0, 0, 0, 0, 0, counter]);
+    let mut pcl = vec![key.len() as u8];
+    pcl.extend(&key);
+    vec![
+        synthetic::Property::binary(0x65e2, key),
+        synthetic::Property::binary(0x65e3, pcl),
+    ]
+}
+
+#[test]
+fn q15_conflict_preserves_public_source_error_kind_and_local_context() {
+    for property in [0x65e2, 0x65e3] {
+        let f = support::Fixture::invalid();
+        let mut item = Item::new("IPM.Note", 10);
+        item.cached = cache_pair(1);
+        item.properties = cache_pair(2)
+            .into_iter()
+            .filter(|p| p.id == property)
+            .collect();
+        let bytes = source_items(vec![item]);
+        std::fs::write(&f.source, &bytes).unwrap();
+        let options = unsplit_options(f.root.join("out"), "conflict".into());
+        let error = convert(&f.source, &options, &mut |_| {}, &CancelToken::default()).unwrap_err();
+        assert!(
+            matches!(error.kind, pstoff_engine::ErrorKind::DamagedSource),
+            "{error:?}"
+        );
+        let mut source = pstoff_format::ndb::Pst::open(f.source.to_str().unwrap()).unwrap();
+        let item = source
+            .nodes()
+            .into_iter()
+            .find(|n| n.nid_type() == 4)
+            .unwrap();
+        for context in [
+            "Q15 conflict".into(),
+            format!("Folder 0x{:x}", item.nid_parent),
+            format!("Item 0x{:x}", item.nid),
+            format!("property 0x{property:04x}0102"),
+            format!("contents table 0x{:x}", item.nid_parent & !31 | 0xe),
+            "no cache value chosen".into(),
+        ] {
+            assert!(
+                error.to_string().contains(&context),
+                "missing {context}: {error}"
+            );
+        }
+        assert!(error.completed_files.is_empty());
+        assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 0);
+        assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn q12_and_q15_agreeing_cache_values_are_recovered_and_reported() {
+    use outlook_pst::ltp::prop_context::PropertyValue;
+    let mut item = Item::new("IPM.Note", 10);
+    item.cached = cache_pair(1);
+    item.cached
+        .push(synthetic::Property::time(0x3008, 132_000_000_000_000_000));
+    let (_f, report) = complete(&source_items(vec![item]), "recovered-cache");
+    let store = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let folder = report.folders.iter().find(|f| f.items == 1).unwrap();
+    let id = store
+        .properties()
+        .make_entry_id(folder.folder.0.into())
+        .unwrap();
+    let folder = store.open_folder(&id).unwrap();
+    let rows = independent_rows(folder.contents_table().unwrap().as_ref());
+    for expected in cache_pair(1) {
+        let Some(PropertyValue::Binary(value)) = rows[0].1.get(&expected.id) else {
+            panic!("missing recovered pair member")
+        };
+        assert_eq!(value.buffer(), expected.bytes);
+    }
+    assert!(matches!(
+        rows[0].1.get(&0x3008),
+        Some(PropertyValue::Time(132_000_000_000_000_000))
+    ));
+    for (tag, rule) in [
+        (0x30080040, "Q12"),
+        (0x65e20102, "Q15"),
+        (0x65e30102, "Q15"),
+    ] {
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.property == tag && d.reason.contains(rule) && d.item.is_some()));
+    }
+}
+
+#[test]
+fn report_failures_after_publication_roll_back_unsplit_outputs_but_keep_split_parts() {
+    // Arm deterministic filesystem faults through the public progress sink.
+    // At 0.95 staging exists; PST publication precedes report writing/renaming.
+    for split in [false, true] {
+        for fault in ["write-json", "write-text", "publish-text"] {
+            let f = support::Fixture::invalid();
+            let bytes = source();
+            std::fs::write(&f.source, &bytes).unwrap();
+            let mut options = unsplit_options(f.root.join("out"), "rollback".into());
+            if split {
+                options.split = pstoff_engine::Split::Bytes(u64::MAX);
+            }
+            let mut injected = false;
+            let error = convert(
+                &f.source,
+                &options,
+                &mut |p: pstoff_engine::Progress| {
+                    if p.fraction == 0.95 {
+                        injected = true;
+                        let staging = options.destination.join(".rollback.pstoff-partial");
+                        match fault {
+                            "write-json" => {
+                                std::fs::create_dir(staging.join("report.json")).unwrap()
+                            }
+                            "write-text" => {
+                                std::fs::create_dir(staging.join("report.txt")).unwrap()
+                            }
+                            "publish-text" => std::fs::write(
+                                options.destination.join("rollback.txt"),
+                                b"other caller",
+                            )
+                            .unwrap(),
+                            _ => unreachable!(),
+                        }
+                    }
+                },
+                &CancelToken::default(),
+            )
+            .unwrap_err();
+            assert!(injected);
+            assert!(
+                matches!(
+                    error.kind,
+                    pstoff_engine::ErrorKind::Io | pstoff_engine::ErrorKind::Collision
+                ),
+                "{error:?}"
+            );
+            assert_eq!(error.completed_files.len(), usize::from(split));
+            let pst = options.destination.join(if split {
+                "rollback-part001.pst"
+            } else {
+                "rollback.pst"
+            });
+            assert_eq!(pst.exists(), split);
+            if split {
+                outlook_pst::open_store(&pst).unwrap();
+            }
+            assert!(!options.destination.join("rollback.json").exists());
+            assert!(!options
+                .destination
+                .join(".rollback.pstoff-partial")
+                .exists());
+            if fault == "publish-text" {
+                assert_eq!(
+                    std::fs::read(options.destination.join("rollback.txt")).unwrap(),
+                    b"other caller"
+                );
+            } else {
+                assert!(!options.destination.join("rollback.txt").exists());
+            }
+            assert_eq!(
+                std::fs::read_dir(&options.destination).unwrap().count(),
+                usize::from(split) + usize::from(fault == "publish-text")
+            );
+            assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+        }
+    }
+}
+
+// Microsoft's high-level embedded attachment reader looks for the embedded NID
+// in the parent's subnodes. Its public NDB APIs can still traverse the actual
+// attachment-local namespace and read its complete logical payload streams.
+fn independent_subnodes(
+    pst: &outlook_pst::UnicodePstFile,
+    bid: outlook_pst::ndb::block_id::UnicodeBlockId,
+) -> Vec<outlook_pst::ndb::block::UnicodeLeafSubNodeTreeEntry> {
+    use outlook_pst::{
+        ndb::{
+            block::SubNodeTree, block_id::BlockId, header::Header, page::UnicodeBlockBTree,
+            root::Root,
+        },
+        PstFile,
+    };
+    let mut file = pst.reader().lock().unwrap();
+    let tree = UnicodeBlockBTree::read(&mut *file, *pst.header().root().block_btree()).unwrap();
+    let mut cache = Default::default();
+    let block = tree
+        .find_entry(&mut *file, bid.search_key(), &mut cache)
+        .unwrap();
+    SubNodeTree::<outlook_pst::UnicodePstFile>::read(&mut *file, &block)
+        .unwrap()
+        .entries(&mut *file, &tree, &mut cache)
+        .unwrap()
+        .collect()
+}
+
+#[test]
+fn microsoft_reader_verifies_recipients_attachment_bytes_and_associated_item_properties() {
+    use outlook_pst::{
+        ltp::prop_context::PropertyValue,
+        messaging::{
+            attachment::{Attachment as _, AttachmentData, UnicodeAttachment},
+            message::{Message as _, UnicodeMessage},
+            store::{Store as _, UnicodeStore},
+        },
+        ndb::page::NodeBTreeEntry,
+        PstFile, UnicodePstFile,
+    };
+    use synthetic::{Attachment, Property, Recipient};
+    let payload: Vec<_> = (0..40_000u32).map(|i| i.wrapping_mul(31) as u8).collect();
+    let embedded_payload: Vec<_> = (0..18_000u32)
+        .map(|i| i.wrapping_mul(17).wrapping_add(3) as u8)
+        .collect();
+    let mut items = vec![];
+    for associated in [false, true] {
+        let mut item = Item::new(
+            if associated {
+                "IPM.Configuration"
+            } else {
+                "IPM.Note"
+            },
+            100,
+        );
+        item.associated = associated;
+        item.properties
+            .push(Property::binary(0x6800, vec![u8::from(associated); 32]));
+        item.recipient_row_ids = vec![7, 44];
+        item.recipients = vec![
+            Recipient {
+                name: "Generated To".into(),
+                address: "to@example.invalid".into(),
+                kind: 1,
+            },
+            Recipient {
+                name: "Generated Cc".into(),
+                address: "cc@example.invalid".into(),
+                kind: 2,
+            },
+        ];
+        let mut inner = Item::new("IPM.Note", 18_000);
+        inner.properties = vec![
+            Property::text(0x0037, "Generated embedded subject"),
+            Property::binary(0x6801, embedded_payload.clone()),
+        ];
+        // A positive embedded recipient table also exercises the nested namespace.
+        inner.recipients.push(Recipient {
+            name: "Generated nested".into(),
+            address: "nested@example.invalid".into(),
+            kind: 1,
+        });
+        item.attachments = vec![
+            Attachment::Bytes(payload.clone()),
+            Attachment::Embedded(Box::new(inner)),
+        ];
+        items.push(item);
+    }
+    let (_f, report) = complete(&source_items(items), "nested-fidelity");
+    assert!(report.skipped.is_empty());
+    assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 2);
+    let pst = std::rc::Rc::new(UnicodePstFile::open(&report.files[0].path).unwrap());
+    let store = UnicodeStore::read(pst.clone()).unwrap();
+    let folder = report.folders.iter().find(|f| f.items == 2).unwrap();
+    let id = store
+        .properties()
+        .make_entry_id(folder.folder.0.into())
+        .unwrap();
+    let folder = store.open_folder(&id).unwrap();
+    for (associated, table) in [
+        (false, folder.contents_table().unwrap()),
+        (true, folder.associated_table().unwrap()),
+    ] {
+        let rows = independent_rows(table.as_ref());
+        assert_eq!(rows.len(), 1);
+        let (nid, _) = &rows[0];
+        assert_eq!(*nid & 31, if associated { 8 } else { 4 });
+        let id = store.properties().make_entry_id((*nid).into()).unwrap();
+        let message = UnicodeMessage::read(store.clone(), &id, None).unwrap();
+        assert_eq!(
+            message.properties().message_class().unwrap(),
+            if associated {
+                "IPM.Configuration"
+            } else {
+                "IPM.Note"
+            }
+        );
+        let Some(PropertyValue::Binary(marker)) = message.properties().get(0x6800) else {
+            panic!("missing Item marker")
+        };
+        assert_eq!(marker.buffer(), [u8::from(associated); 32]);
+        let recipients = independent_rows(message.recipient_table().unwrap().as_ref());
+        assert_eq!(recipients.len(), 2);
+        for ((row, cells), (expected_row, name, address, kind)) in recipients.iter().zip([
+            (7, "Generated To", "to@example.invalid", 1),
+            (44, "Generated Cc", "cc@example.invalid", 2),
+        ]) {
+            assert_eq!(*row, expected_row);
+            assert!(
+                matches!(cells.get(&0x0c15), Some(PropertyValue::Integer32(value)) if *value == kind)
+            );
+            for (tag, expected) in [(0x3001, name), (0x3002, "SMTP"), (0x3003, address)] {
+                let Some(PropertyValue::Unicode(value)) = cells.get(&tag) else {
+                    panic!("missing recipient field")
+                };
+                assert_eq!(value.to_string(), expected);
+            }
+        }
+        let attachments = independent_rows(message.attachment_table().unwrap().as_ref());
+        assert_eq!(attachments.len(), 2);
+        for (index, (_, cells)) in attachments.iter().enumerate() {
+            assert!(
+                matches!(cells.get(&0x0e21), Some(PropertyValue::Integer32(value)) if *value == index as i32)
+            );
+        }
+        let attachment = UnicodeAttachment::read(message, attachments[0].0.into(), None).unwrap();
+        assert_eq!(attachment.properties().attachment_method().unwrap(), 1);
+        let Some(AttachmentData::Binary(data)) = attachment.data() else {
+            panic!("missing attachment bytes")
+        };
+        assert_eq!(data.buffer(), payload);
+
+        // Traverse nested subnodes using only Microsoft's reader. No writer or
+        // pstoff-format output reader supplies these identities or bytes.
+        let top = pst.read_node((*nid).into()).unwrap();
+        let subs = independent_subnodes(&pst, top.sub_node().unwrap());
+        let embedded_attachment = subs
+            .iter()
+            .find(|n| u32::from(n.node()) == attachments[1].0)
+            .unwrap();
+        let nested = independent_subnodes(&pst, embedded_attachment.sub_node().unwrap());
+        let embedded = nested
+            .iter()
+            .find(|n| u32::from(n.node()) & 31 == 4)
+            .unwrap();
+        let pc = pst.read_block(embedded.block()).unwrap();
+        assert_eq!(&pc[2..4], &[0xec, 0xbc]);
+        let subject: Vec<_> = "Generated embedded subject"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(pc.windows(subject.len()).any(|window| window == subject));
+        let inner_subs = independent_subnodes(&pst, embedded.sub_node().unwrap());
+        let streams: Vec<_> = inner_subs
+            .iter()
+            .filter(|n| u32::from(n.node()) & 31 == 0x1f)
+            .map(|n| pst.read_block(n.block()).unwrap())
+            .collect();
+        assert!(streams.iter().any(|bytes| bytes == &embedded_payload));
+        let recipient = inner_subs
+            .iter()
+            .find(|n| u32::from(n.node()) & 31 == 0x12)
+            .unwrap();
+        let node = outlook_pst::ndb::page::UnicodeNodeBTreeEntry::new(
+            recipient.node(),
+            recipient.block(),
+            recipient.sub_node(),
+            None,
+        );
+        let table = outlook_pst::ltp::table_context::UnicodeTableContext::read(store.clone(), node)
+            .unwrap();
+        let recipients = independent_rows(table.as_ref());
+        assert_eq!(recipients.len(), 1);
+        let Some(PropertyValue::Unicode(address)) = recipients[0].1.get(&0x3003) else {
+            panic!("missing embedded recipient")
+        };
+        assert_eq!(address.to_string(), "nested@example.invalid");
+    }
 }
