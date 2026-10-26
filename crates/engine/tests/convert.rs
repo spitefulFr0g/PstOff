@@ -61,6 +61,7 @@ fn folder_entry(id: u16, nid: u32) -> synthetic::Property {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn localized_system_folder_entry_ids_retain_source_hierarchy_and_payload() {
     let payload: Vec<_> = (0..20_000).map(|i| (i * 37 % 251) as u8).collect();
     let mut item = Item::new("IPM.Note", 1234);
@@ -115,6 +116,7 @@ fn localized_system_folder_entry_ids_retain_source_hierarchy_and_payload() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn source_folder_identity_overrides_english_decoys_in_split_and_exclusions() {
     let mut input = source_store(vec![Item::new("IPM.Note", 100)]);
     input.root.children[0].name = "Custom mailbox".into();
@@ -182,6 +184,7 @@ fn source_folder_identity_overrides_english_decoys_in_split_and_exclusions() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn source_identity_supports_an_ipm_subtree_directly_under_root() {
     let input = Store {
         root: Folder {
@@ -323,6 +326,7 @@ fn invalid_source_system_entry_ids_do_not_fall_back_to_english_names() {
 }
 
 #[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
 fn identified_unreadable_localized_subtree_gets_reported_empty_scaffolding() {
     let mut input = source_store(vec![Item::new("IPM.Note", 100)]);
     input.root.children[0].name = "Custom mailbox".into();
