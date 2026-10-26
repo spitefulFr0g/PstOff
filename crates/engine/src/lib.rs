@@ -1,6 +1,7 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
 mod reader;
+mod writer;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -10,6 +11,8 @@ use std::sync::{
 
 pub const DEFAULT_SPLIT_BYTES: u64 = 21_474_836_480;
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
+/// An OST records cached contents, not the server mailbox's full history.
+pub const MAILBOX_COMPLETENESS_STATEMENT: &str = "Mailbox completeness: unknown. An OST holds only what Outlook synced. Items or folders that were never synced cannot be recovered from this file.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FolderRef(pub u32);
@@ -153,6 +156,7 @@ pub enum MailboxCompleteness {
 pub struct ConversionReport {
     pub schema_version: u32,
     pub mailbox_completeness: MailboxCompleteness,
+    pub mailbox_completeness_statement: String,
     pub source: PathBuf,
     pub source_sha256: String,
     pub files: Vec<OutputFile>,
@@ -204,33 +208,18 @@ pub enum BatchResult {
         source: PathBuf,
     },
 }
-
-fn unavailable() -> EngineError {
-    EngineError {
-        kind: ErrorKind::NotImplemented,
-        message:
-            "The OST reader and PST writer are not implemented yet; no conversion was performed."
-                .into(),
-        completed_files: Vec::new(),
-    }
-}
 /// Inspect a supported v36 OST without modifying the source.
 /// Unsupported formats and Windows sharing violations are explicit store outcomes.
 pub fn inspect(path: impl AsRef<Path>) -> Result<Inspection, EngineError> {
     reader::inspect(path.as_ref())
 }
-/// Convert through the shared policy layer. Never reports success before a writer exists.
+/// Convert a supported OST in Copy mode through the public policy boundary.
 pub fn convert(
     path: impl AsRef<Path>,
-    _options: &ConvertOptions,
-    _progress: &mut dyn ProgressSink,
+    options: &ConvertOptions,
+    progress: &mut dyn ProgressSink,
     cancel: &CancelToken,
 ) -> Result<Conversion, EngineError> {
-    if cancel.is_cancelled() {
-        return Ok(Conversion::Cancelled {
-            completed_files: Vec::new(),
-        });
-    }
-    reader::validate(path.as_ref())?;
-    Err(unavailable())
+    conversion::convert(path.as_ref(), options, progress, cancel)
 }
+mod conversion;

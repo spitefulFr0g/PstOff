@@ -1,4 +1,6 @@
-use pstoff_engine::{convert, inspect, CancelToken, ConvertOptions, ErrorKind, Progress, Support};
+use pstoff_engine::{
+    convert, inspect, CancelToken, Conversion, ConvertOptions, ErrorKind, Progress, Support,
+};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -7,7 +9,7 @@ fn main() -> ExitCode {
     let program = args.next().unwrap_or_default();
     let Some(command) = args.next() else {
         eprintln!(
-            "Usage: {} inspect <ost> | convert <ost> <destination>",
+            "Usage: {} inspect <ost> | convert <ost> --out <dir>",
             Path::new(&program).display()
         );
         return ExitCode::from(2);
@@ -18,17 +20,27 @@ fn main() -> ExitCode {
     }
     let Some(path) = args.next() else {
         eprintln!(
-            "Usage: {} inspect <ost> | convert <ost> <destination>",
+            "Usage: {} inspect <ost> | convert <ost> --out <dir>",
             Path::new(&program).display()
         );
         return ExitCode::from(2);
     };
-    let destination = args.next();
+    let destination = if command == "convert" {
+        match args.next() {
+            Some(flag) if flag == "--out" => args.next(),
+            _ => None,
+        }
+    } else {
+        args.next()
+    };
     if args.next().is_some()
         || (command == "inspect" && destination.is_some())
         || (command == "convert" && destination.is_none())
     {
-        eprintln!("Usage: {} inspect <ost>", Path::new(&program).display());
+        eprintln!(
+            "Usage: {} inspect <ost> | convert <ost> --out <dir>",
+            Path::new(&program).display()
+        );
         return ExitCode::from(2);
     }
 
@@ -42,7 +54,22 @@ fn main() -> ExitCode {
         let options = ConvertOptions::new(destination.to_path_buf(), base_name);
         let mut progress = |_p: Progress| {};
         return match convert(&path, &options, &mut progress, &CancelToken::default()) {
-            Ok(_) => ExitCode::SUCCESS,
+            Ok(Conversion::Complete(report)) => {
+                for file in &report.files {
+                    println!("PST: {} ({} bytes)", file.path.display(), file.bytes);
+                    println!(
+                        "Reports: {}, {}",
+                        file.path.with_extension("json").display(),
+                        file.path.with_extension("txt").display()
+                    );
+                }
+                println!("{}", report.mailbox_completeness_statement);
+                ExitCode::SUCCESS
+            }
+            Ok(Conversion::Cancelled { .. }) => {
+                eprintln!("Conversion cancelled.");
+                ExitCode::from(130)
+            }
             Err(error) => {
                 eprintln!("Conversion failed: {error}");
                 if matches!(error.kind, ErrorKind::Unsupported(_)) {

@@ -7,3 +7,7 @@ rust-version.workspace = true
 publish = false
 [dependencies]
 pstoff-engine.workspace = true
+
+[[bin]]
+name = "pstoff"
+path = "src/main.rs"

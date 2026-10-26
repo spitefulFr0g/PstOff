@@ -110,7 +110,36 @@ pub(crate) fn item_properties(
 pub(crate) fn read_source(
     path: &Path,
 ) -> Result<(Pst, Vec<pstoff_format::ndb::Node>), EngineError> {
-    let mut file = open(path)?;
+    read_handle(open(path)?)
+}
+
+pub(crate) fn conversion_source(
+    path: &Path,
+) -> Result<(Pst, Vec<pstoff_format::ndb::Node>, String), EngineError> {
+    use sha2::{Digest, Sha256};
+    let file = open(path)?;
+    let mut identity = file
+        .try_clone()
+        .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
+    let (store, nodes) = read_handle(file)?;
+    identity
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        let n = identity
+            .read(&mut buffer)
+            .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        digest.update(&buffer[..n]);
+    }
+    Ok((store, nodes, format!("{:x}", digest.finalize())))
+}
+
+fn read_handle(mut file: File) -> Result<(Pst, Vec<pstoff_format::ndb::Node>), EngineError> {
     match classify(&mut file)? {
         Support::Unsupported(reason) => {
             return Err(error(
@@ -290,8 +319,4 @@ pub(super) fn inspect(path: &Path) -> Result<Inspection, EngineError> {
         support,
         folders,
     })
-}
-
-pub(super) fn validate(path: &Path) -> Result<(), EngineError> {
-    read_source(path).map(|_| ())
 }

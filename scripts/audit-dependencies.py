@@ -9,6 +9,8 @@ APPROVED = {
     "MIT", "MIT OR Apache-2.0", "Apache-2.0 OR MIT", "Unlicense OR MIT",
     "0BSD OR MIT OR Apache-2.0", "MIT OR Zlib OR Apache-2.0",
     "(MIT OR Apache-2.0) AND Unicode-3.0",
+    # Reviewed from locked ryu 1.0.20 and version_check 0.9.5 license files.
+    "Apache-2.0 OR BSL-1.0", "MIT/Apache-2.0",
 }
 metadata = json.load(sys.stdin)
 errors = []
