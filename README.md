@@ -2,7 +2,8 @@
 
 PstOff is an MIT-licensed Windows OST-to-PST converter under construction.
 The engine and CLI inspect supported v36 OSTs and perform a first Copy mode
-conversion to a conventional Unicode PST. The GUI remains a skeleton.
+conversion to a conventional Unicode PST. The GUI is a guided wizard over
+the same engine calls.
 
 `pstoff convert <ost> --out <dir>` writes `<source-stem>-part001.pst` (and
 further numbered parts as needed), plus JSON and
@@ -61,8 +62,8 @@ Every Cargo command, including the first build and test, goes through the
 Windows Sandbox wrapper. It fetches locked dependencies on the host without
 running crate code, then maps the source, dependency cache and toolchain
 read-only into the guest. `scripts/check` checks dependency licenses/pins,
-formatting, Clippy and engine/CLI/GUI skeleton tests. It does not execute the
-imported fork's upstream tests or build GPUI.
+formatting, Clippy and engine/CLI/GUI tests, including headless GPUI tests of
+the wizard. It does not execute the imported fork's upstream tests.
 
 ```powershell
 python scripts/sandbox-cargo.py test --locked -p pstoff-engine
@@ -70,9 +71,20 @@ python scripts/sandbox-cargo.py run --locked -p pstoff-cli
 ```
 
 All builds follow [safety](docs/agents/safety.md).
-The GUI has no GPUI dependency until its Windows feasibility task selects and
-audits a pin; Linux resolution and compilation do not include GPUI. The
-skeleton exits with failure and clearly states its status.
+
+## GUI
+
+`pstoff-gui` is a GPUI wizard pinned to the `gpui-pre` 0.3.9 snapshot audited
+by the Windows feasibility probe: Add OST files → Choose folders → Output →
+Convert → Report. It calls only the engine's public `inspect` and `convert`,
+runs them off the UI thread, and shows the engine's statuses, errors and
+Conversion reports. Folder exclusions and Split use the engine's public options.
+The file preview estimates names and sizes from inspected folder sizes; final
+part counts and sizes depend on whole Items and PST overhead, so the saved
+Conversion report is authoritative. OST paths on the command line are added on start, as when files
+are dropped on the `.exe`; `--out <folder>` picks the destination. The GUI is
+launched only inside Windows Sandbox: see the smoke run in
+[`docs/agents/environment.md`](docs/agents/environment.md).
 
 ## Architecture and tests
 

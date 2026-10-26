@@ -3,7 +3,17 @@ name = "pstoff-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
+# GPUI is an edition 2024 crate.
+rust-version = "1.85"
 publish = false
+
 [dependencies]
 pstoff-engine.workspace = true
+
+# GPUI is pinned to the snapshot audited by the #6/#37 Windows feasibility probe.
+[target.'cfg(windows)'.dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false }
+
+[target.'cfg(windows)'.dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
