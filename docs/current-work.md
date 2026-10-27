@@ -4,11 +4,12 @@ Checkpoint: 2026-10-27. This is the authoritative current handoff; older issue
 notes describe their recorded revisions. Verify live PR state with `gh` and
 agent activity from task events.
 
-## Active scope
+## Latest delivery
 
 Direct user request: implement the retrospective's recommended delivery,
 check-feedback and handoff improvements, then merge a focused tooling PR.
 Branch: `chore/delivery-workflow`.
+[PR #51](https://github.com/spitefulFr0g/PstOff/pull/51) records live delivery state.
 
 Acceptance and proof:
 
@@ -31,9 +32,15 @@ and 30 Python harness tests. Live output showed stages, elapsed time and exit
 codes before completion. Sol reviewed the scope in one round; its sole finding
 was fixed by dropping the optional Linux Python-test step (the harness uses a
 Windows-only lock). No other actionable findings were reported.
-The full Sandbox check is running. Next action: finish full validation, then
-merge the tooling PR once hosted checks pass.
-No blocker identified. Check the PR for live delivery state.
+`python scripts/check --full` also passed: the full workspace suite including
+the memory regression, audit, formatting, Clippy, GUI example and 30 Python
+tests. Both observed Sandbox runs cover the tooling behavior in `2fd7a41`;
+the subsequent edit only records this evidence. Hosted Ubuntu CI passed on
+`2fd7a41`; consult PR #51 for the final documentation revision's check/merge
+state. No outstanding review finding or implementation blocker remains.
+
+Implementation and validation are complete. Delivery stops when PR #51 merges.
+The next session should verify that state, then select one focused product issue.
 
 ## Product baseline
 
