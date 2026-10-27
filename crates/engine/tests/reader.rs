@@ -406,9 +406,10 @@ fn named_property_map_checks_streams_and_preserves_item_readability() {
 #[test]
 fn recipient_and_attachment_contexts_are_read_and_damage_is_visible() {
     for bad in [false, true] {
+        // A healthy PC BTH has increasing property IDs.
         let mut attachment = pc(&[
-            (0x3705, 3, 1u32.to_le_bytes().to_vec()),
             (0x3701, 0x102, vec![0; 32]),
+            (0x3705, 3, 1u32.to_le_bytes().to_vec()),
         ]);
         if bad {
             attachment[2] = 0;

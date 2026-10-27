@@ -1,6 +1,7 @@
 //! Raw property values are never decoded and re-encoded during heap relocation.
+use super::table_storage::{Blocks, Heap};
 use super::{p16, p32, Result, MAX};
-use pstoff_format::{ltp::Heap, ndb::Pst};
+use pstoff_format::ndb::Pst;
 use std::collections::BTreeMap;
 
 #[derive(Clone)]
@@ -59,67 +60,203 @@ fn read_properties(
     materialize: impl Fn(u16, u16) -> bool,
     cancel: Option<&crate::CancelToken>,
 ) -> Result<Properties> {
-    let heap = Heap::new(source.node_blocks(bid)?)?;
+    let mut cells = Properties::new();
+    let result = visit_properties(
+        source,
+        bid,
+        sub,
+        |id, kind| if materialize(id, kind) { usize::MAX } else { 0 },
+        cancel,
+        |id, cell| {
+            cells.insert(id, cell);
+            Ok(())
+        },
+    );
+    if !cancel.is_some_and(crate::CancelToken::is_cancelled) {
+        result?;
+    }
+    Ok(cells)
+}
+
+// Retain one heap allocation per depth, never the complete PC heap or a
+// fan-out-sized pending vector. An ordered key cursor detects duplicates even
+// when the caller discards every descriptor.
+fn visit_properties(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    materialize: impl Fn(u16, u16) -> usize,
+    cancel: Option<&crate::CancelToken>,
+    mut visit: impl FnMut(u16, Cell) -> Result<()>,
+) -> Result<()> {
+    let mut blocks = Blocks::new()?;
+    for chunk in source.node_chunks(bid)? {
+        if cancel.is_some_and(crate::CancelToken::is_cancelled) {
+            return Err("Cancelled property read".into());
+        }
+        blocks.push(&chunk?)?;
+    }
+    let mut heap = Heap::new(blocks, source.ver)?;
+    if heap.client_sig != 0xbc {
+        return Err("Invalid property context signature".into());
+    }
     let header = heap.item(heap.user_root)?;
     if header.len() != 8 || header[..3] != [0xb5, 2, 6] {
         return Err("Invalid property BTH".into());
     }
-    let mut pending = vec![(u32at(header, 4)?, header[3])];
-    let mut cells = Properties::new();
     let subs = source.subnodes(sub)?;
-    while let Some((hid, level)) = pending.pop() {
+    let mut previous = None;
+    fn walk(
+        heap: &mut Heap,
+        hid: u32,
+        level: u8,
+        previous: &mut Option<u16>,
+        leaf: &mut impl FnMut(u16, u16, u32, &mut Heap) -> Result<()>,
+    ) -> Result<()> {
         if level > 32 {
             return Err("Excessive property BTH depth".into());
         }
         let data = heap.item(hid)?;
         let width = if level == 0 { 8 } else { 6 };
-        if data.len() % width != 0 {
+        if !data.len().is_multiple_of(width) {
             return Err("Partial BTH entry".into());
         }
         for r in data.chunks_exact(width) {
             if level != 0 {
-                pending.push((u32at(r, 2)?, level - 1));
-                continue;
+                walk(heap, u32at(r, 2)?, level - 1, previous, leaf)?;
+            } else {
+                let id = u16::from_le_bytes(r[..2].try_into()?);
+                if previous.is_some_and(|last| id <= last) {
+                    return Err("Duplicate or out-of-order property".into());
+                }
+                *previous = Some(id);
+                leaf(
+                    id,
+                    u16::from_le_bytes(r[2..4].try_into()?),
+                    u32at(r, 4)?,
+                    heap,
+                )?;
             }
-            let id = u16::from_le_bytes(r[..2].try_into()?);
-            let kind = u16::from_le_bytes(r[2..4].try_into()?);
-            let value = u32at(r, 4)?;
+        }
+        Ok(())
+    }
+    walk(
+        &mut heap,
+        u32at(&header, 4)?,
+        header[3],
+        &mut previous,
+        &mut |id, kind, value, heap| {
+            if cancel.is_some_and(crate::CancelToken::is_cancelled) {
+                return Err("Cancelled property read".into());
+            }
+            let wanted = materialize(id, kind);
             let bytes = if inline(kind) {
-                r[4..8].to_vec()
+                value.to_le_bytes().to_vec()
             } else if value & 31 == 0 {
-                heap.item(value)?.to_vec()
+                heap.item(value)?
             } else {
                 let node = subs.get(&value).ok_or("Missing property payload subnode")?;
                 let mut bytes = Vec::new();
                 for chunk in source.node_chunks(node.data)? {
-                    // Callers discard this partial plan when cancellation is set.
                     if cancel.is_some_and(crate::CancelToken::is_cancelled) {
-                        return Ok(cells);
+                        return Err("Cancelled property read".into());
                     }
                     let chunk = chunk?;
-                    if materialize(id, kind) {
-                        bytes.extend_from_slice(&chunk);
-                    }
+                    let n = wanted.saturating_sub(bytes.len()).min(chunk.len());
+                    bytes.extend_from_slice(&chunk[..n]);
                 }
                 bytes
             };
-            let subnode = (!inline(kind) && value & 31 != 0).then_some(value);
-            if cells
-                .insert(
-                    id,
-                    Cell {
-                        kind,
-                        bytes,
-                        subnode,
-                    },
-                )
-                .is_some()
-            {
-                return Err("Duplicate property".into());
+            visit(
+                id,
+                Cell {
+                    kind,
+                    bytes,
+                    subnode: (!inline(kind) && value & 31 != 0).then_some(value),
+                },
+            )
+        },
+    )
+}
+
+// Evidence and inspection read only their exact operands. Every other payload
+// is still traversed for integrity, without collecting its bytes or descriptor.
+pub(crate) fn evidence_properties(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    ids: &[u16],
+    cancel: &crate::CancelToken,
+) -> Result<pstoff_format::ltp::Pc> {
+    use pstoff_format::ltp::{Pc, Value, PID_MESSAGE_CODEPAGE};
+    let mut selected = Properties::new();
+    visit_properties(
+        source,
+        bid,
+        sub,
+        |id, kind| {
+            if id == PID_MESSAGE_CODEPAGE {
+                return if matches!(kind, 2 | 3 | 0xa | 6 | 0x14) {
+                    8
+                } else {
+                    0
+                };
             }
-        }
+            if !ids.contains(&id) || id == 0x3701 {
+                return 0;
+            }
+            match id {
+                0x3001 | 0x3707 | 0x370d | 0x3708 if matches!(kind, 0x1e | 0x1f) => usize::MAX,
+                0x0e08 if matches!(kind, 2 | 3 | 6 | 0x14) => 8,
+                _ if kind == 3 => 4,
+                _ => 0,
+            }
+        },
+        Some(cancel),
+        |id, cell| {
+            if ids.contains(&id) || id == PID_MESSAGE_CODEPAGE {
+                selected.insert(id, cell);
+            }
+            Ok(())
+        },
+    )?;
+    let cp = selected.get(&PID_MESSAGE_CODEPAGE).and_then(|c| {
+        let value = match c.kind {
+            2 => i64::from(i16::from_le_bytes(c.bytes.get(..2)?.try_into().ok()?)),
+            3 | 0xa => i64::from(i32::from_le_bytes(c.bytes.get(..4)?.try_into().ok()?)),
+            6 | 0x14 => i64::from_le_bytes(c.bytes.get(..8)?.try_into().ok()?),
+            _ => return None,
+        };
+        u32::try_from(value).ok()
+    });
+    let mut pc = Pc {
+        props: BTreeMap::new(),
+        types: BTreeMap::new(),
+        from_subnode: 0,
+    };
+    for (id, cell) in selected {
+        let b = cell.bytes;
+        let value = match cell.kind {
+            2 => Value::Int(i16::from_le_bytes(b[..2].try_into()?) as i64),
+            3 | 0xa => Value::Int(i32::from_le_bytes(b[..4].try_into()?) as i64),
+            6 | 0x14 if b.len() >= 8 => Value::Int(i64::from_le_bytes(b[..8].try_into()?)),
+            0x1f => Value::Str(String::from_utf16_lossy(
+                &b.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|r| u16::from_le_bytes([r[0], r[1]]))
+                    .collect::<Vec<_>>(),
+            )),
+            0x1e => Value::Str(pstoff_format::html::decode(&b, cp)),
+            _ => Value::Raw {
+                ptype: cell.kind,
+                bytes: b,
+            },
+        };
+        pc.types.insert(id, cell.kind);
+        pc.props.insert(id, value);
     }
-    Ok(cells)
+    Ok(pc)
 }
 
 pub(super) struct HeapBuilder {

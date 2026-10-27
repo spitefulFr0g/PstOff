@@ -7,7 +7,6 @@ use pstoff_format::{
 };
 use std::collections::{BTreeMap, HashSet};
 
-#[derive(Clone)]
 pub(crate) struct Recovery {
     pub nodes: Vec<Node>,
     pub system: system::SystemFolders,
@@ -44,7 +43,7 @@ fn validate(
         }
         match kind {
             0xbc => {
-                context::relocation_properties(source, data, sub, cancel)?;
+                context::evidence_properties(source, data, sub, &[], cancel)?;
             }
             0x7c => {
                 table::read(source, data, sub, cancel)?;
@@ -96,9 +95,13 @@ fn readable<T>(result: Result<T>) -> Result<bool> {
         Err(_) => Ok(false),
     }
 }
-pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) -> Result<Recovery> {
-    let identity = system::resolve(source, nodes)?;
-    let names = ltp::read_named_properties(source, nodes)?;
+pub(crate) fn prepare(
+    source: &mut Pst,
+    mut nodes: Vec<Node>,
+    cancel: &CancelToken,
+) -> Result<Recovery> {
+    let identity = system::resolve(source, &nodes)?;
+    let names = ltp::read_named_properties(source, &nodes)?;
     let header_ids: Vec<_> = names
         .iter()
         .filter(|(_, p)| {
@@ -152,7 +155,7 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
             break;
         }
     }
-    for n in nodes {
+    for n in &nodes {
         if lost.contains(&n.nid) && matches!(n.nid_type(), 2 | 3) {
             omitted.insert(n.nid);
             skipped.push(Skipped {
@@ -211,7 +214,7 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
             });
             continue;
         }
-        let pc = ltp::read_node_pc(source, n)?;
+        let pc = context::evidence_properties(source, n.bid_data, n.bid_sub, &header_ids, cancel)?;
         let mut header_unknown = false;
         let mut positive = false;
         for id in &header_ids {
@@ -241,7 +244,13 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
             }
             for (id, child) in source.subnodes(bid)? {
                 if id & 31 == 5 {
-                    let pc = ltp::read_pc(source, child.data, child.sub)?;
+                    let pc = context::evidence_properties(
+                        source,
+                        child.data,
+                        child.sub,
+                        &[0x3705, 0x3707, 0x370d, 0x3708, 0x3701],
+                        cancel,
+                    )?;
                     match (pc.types.get(&0x3705), pc.props.get(&0x3705)) {
                         (Some(3), Some(ltp::Value::Int(2 | 3 | 4 | 7))) => {
                             let web = matches!(pc.props.get(&0x3705), Some(ltp::Value::Int(7)));
@@ -269,18 +278,11 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
     }
     header_unchecked.extend(unchecked.iter().cloned());
     external_unchecked.extend(unchecked);
-    let mut retained: Vec<_> = nodes
-        .iter()
-        .filter(|n| !omitted.contains(&n.nid))
-        .cloned()
-        .collect();
-    let (system, created) = system::repair(
-        identity,
-        &mut retained,
-        nodes.iter().map(|n| n.nid & !31).max().unwrap_or(0x120),
-    )?;
+    let highwater = nodes.iter().map(|n| n.nid & !31).max().unwrap_or(0x120);
+    nodes.retain(|n| !omitted.contains(&n.nid));
+    let (system, created) = system::repair(identity, &mut nodes, highwater)?;
     Ok(Recovery {
-        nodes: retained,
+        nodes,
         system,
         created,
         omitted,

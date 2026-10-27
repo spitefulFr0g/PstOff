@@ -89,6 +89,11 @@ fn source_payload_relocation_is_selective_ordered_and_cancellable() {
     let count = output.blocks.len;
     let len = output.file.metadata().unwrap().len();
     cancel.cancel();
+    assert!(
+        context::relocation_properties(&mut source, node.bid_data, node.bid_sub, &cancel)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(output.source_stream(&mut source, bid, false).unwrap(), 0);
     assert_eq!(output.blocks.len, count);
     assert_eq!(output.file.metadata().unwrap().len(), len);
@@ -190,4 +195,152 @@ fn output_tree_rejects_truncation_and_cancellation_and_partial_is_removed() {
         assert_eq!(out.file.metadata().unwrap().len(), before);
     }
     assert!(!path.exists());
+}
+
+#[test]
+fn inspection_and_recovery_discard_large_unselected_properties() {
+    for len in [64_000, 700_000] {
+        let fixture = support::Fixture::invalid();
+        let mut item = synthetic::Item::new("IPM.Note", 123);
+        item.properties
+            .push(synthetic::Property::binary(0x6801, vec![0x5a; len]));
+        let mut store = synthetic::Store {
+            root: synthetic::Folder {
+                name: "Generated".into(),
+                role: Some(synthetic::SystemFolder::IpmSubtree),
+                items: vec![item],
+                ..Default::default()
+            },
+        };
+        store.root.children.push(synthetic::Folder {
+            name: "Generated".into(),
+            role: Some(synthetic::SystemFolder::Wastebasket),
+            ..Default::default()
+        });
+        let bytes = synthetic::Store {
+            root: synthetic::Folder {
+                children: vec![
+                    store.root,
+                    synthetic::Folder {
+                        name: "Generated".into(),
+                        role: Some(synthetic::SystemFolder::Finder),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        }
+        .build();
+        std::fs::write(&fixture.source, &bytes).unwrap();
+        let (mut source, nodes) = crate::reader::read_source(&fixture.source).unwrap();
+        let item = nodes.iter().find(|n| n.nid_type() == 4).unwrap();
+        let (pc, peak) =
+            allocations::measure(|| crate::reader::item_properties(&mut source, item).unwrap());
+        assert!(!pc.props.contains_key(&0x6801));
+        assert!(
+            peak < 256 * 1024,
+            "unselected payload {len}, allocation delta {peak}"
+        );
+        let full = pstoff_format::ltp::read_node_pc(&mut source, item).unwrap();
+        assert!(
+            matches!(&full.props[&0x6801], pstoff_format::ltp::Value::Bytes(b) if b.len() == len && b.iter().all(|v| *v == 0x5a))
+        );
+        let recovery = recovery::prepare(&mut source, nodes, &Default::default()).unwrap();
+        assert!(recovery.omitted.is_empty());
+        let path = fixture.root.join("readback.pst");
+        write(
+            &mut source,
+            &recovery,
+            &path,
+            "Generated",
+            &mut |_| {},
+            &Default::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let mut readback = Pst::from_file(File::open(path).unwrap()).unwrap();
+        let item = readback
+            .nodes()
+            .into_iter()
+            .find(|n| n.nid_type() == 4)
+            .unwrap();
+        let pc = pstoff_format::ltp::read_node_pc(&mut readback, &item).unwrap();
+        assert!(
+            matches!(&pc.props[&0x6801], pstoff_format::ltp::Value::Bytes(b) if b.len() == len && b.iter().all(|v| *v == 0x5a))
+        );
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn growing_generated_folder_item_counts_keep_selection_identity_and_source_bytes() {
+    for count in [1, 8, 16] {
+        let fixture = support::Fixture::invalid();
+        let children = (0..count)
+            .map(|_| synthetic::Folder {
+                name: "Generated".into(),
+                items: vec![synthetic::Item::new("IPM.Note", 19)],
+                ..Default::default()
+            })
+            .collect();
+        let mut store = synthetic::Store {
+            root: synthetic::Folder {
+                name: "Generated".into(),
+                role: Some(synthetic::SystemFolder::IpmSubtree),
+                children,
+                ..Default::default()
+            },
+        };
+        store.root.children.push(synthetic::Folder {
+            name: "Generated".into(),
+            role: Some(synthetic::SystemFolder::Wastebasket),
+            ..Default::default()
+        });
+        let bytes = synthetic::Store {
+            root: synthetic::Folder {
+                children: vec![
+                    store.root,
+                    synthetic::Folder {
+                        name: "Generated".into(),
+                        role: Some(synthetic::SystemFolder::Finder),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        }
+        .build();
+        std::fs::write(&fixture.source, &bytes).unwrap();
+        let (mut source, nodes) = crate::reader::read_source(&fixture.source).unwrap();
+        let original: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.nid_type() == 4)
+            .map(|n| (n.nid, n.nid_parent, n.bid_data, n.bid_sub))
+            .collect();
+        let inspection =
+            crate::reader::inspect_nodes(&fixture.source, &mut source, &nodes).unwrap();
+        let mut pending: Vec<_> = inspection.folders.iter().collect();
+        let mut items = 0;
+        while let Some(folder) = pending.pop() {
+            assert!(folder.unreadable.is_none());
+            items += folder.item_count;
+            pending.extend(&folder.children);
+        }
+        assert_eq!(items, count);
+        let recovery = recovery::prepare(&mut source, nodes, &Default::default()).unwrap();
+        let selection = crate::planner::Selection::new(recovery, Default::default());
+        for item in &selection.items {
+            let part = selection.part(std::slice::from_ref(item), true);
+            let retained: Vec<_> = part.nodes.iter().filter(|n| n.nid_type() == 4).collect();
+            assert_eq!(retained.len(), 1);
+            assert!(original.contains(&(
+                retained[0].nid,
+                retained[0].nid_parent,
+                retained[0].bid_data,
+                retained[0].bid_sub
+            )));
+            assert!(part.skipped.is_empty());
+        }
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), bytes);
+    }
 }

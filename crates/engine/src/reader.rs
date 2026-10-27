@@ -72,7 +72,13 @@ pub(crate) fn item_properties(
     store: &mut Pst,
     node: &pstoff_format::ndb::Node,
 ) -> Result<ltp::Pc, Box<dyn std::error::Error>> {
-    let pc = ltp::read_node_pc(store, node)?;
+    let pc = crate::writer::evidence_properties(
+        store,
+        node.bid_data,
+        node.bid_sub,
+        &[ltp::PID_MESSAGE_SIZE],
+        &crate::CancelToken::default(),
+    )?;
     if pc
         .props
         .values()
@@ -92,7 +98,13 @@ pub(crate) fn item_properties(
         for (nid, sub) in store.subnodes(bid)? {
             match nid & 31 {
                 4 | 5 => {
-                    ltp::read_pc(store, sub.data, sub.sub)?;
+                    crate::writer::evidence_properties(
+                        store,
+                        sub.data,
+                        sub.sub,
+                        &[],
+                        &crate::CancelToken::default(),
+                    )?;
                 }
                 0x11 | 0x12 => {
                     crate::writer::validate_table(store, sub.data, sub.sub)?;
@@ -174,160 +186,161 @@ fn read_handle(mut file: File) -> Result<(Pst, Vec<pstoff_format::ndb::Node>), E
 }
 
 pub(super) fn inspect(path: &Path) -> Result<Inspection, EngineError> {
-    let mut folders = Vec::new();
-    let support;
-    match read_source(path) {
-        Err(e) => {
-            support = match e.kind {
-                ErrorKind::Unsupported(reason) => Support::Unsupported(reason),
-                ErrorKind::InUse => Support::InUse,
-                _ => return Err(e),
-            };
-        }
+    let folders = Vec::new();
+    let support = match read_source(path) {
+        Err(e) => match e.kind {
+            ErrorKind::Unsupported(reason) => Support::Unsupported(reason),
+            ErrorKind::InUse => Support::InUse,
+            _ => return Err(e),
+        },
         Ok((mut store, nodes)) => {
-            support = Support::Supported;
-            let mut flat = BTreeMap::new();
-            let mut parents = BTreeMap::new();
-            let mut children_by_parent: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-            let mut items_by_folder: BTreeMap<u32, Vec<_>> = BTreeMap::new();
-            let mut tables_by_folder: BTreeMap<u32, Vec<_>> = BTreeMap::new();
-            for node in &nodes {
-                if node.nid_type() == 4 {
-                    items_by_folder
-                        .entry(node.nid_parent)
-                        .or_default()
-                        .push(node);
-                }
-                if matches!(node.nid_type(), 0x0d..=0x0f) {
-                    tables_by_folder
-                        .entry(node.nid & !31)
-                        .or_default()
-                        .push(node);
-                }
-            }
-            for node in nodes
-                .iter()
-                .filter(|n| n.nid_type() == 2 || n.nid_type() == 3)
-            {
-                let mut folder = Folder {
-                    id: FolderRef(node.nid),
-                    name: String::new(),
-                    item_count: 0,
-                    bytes: 0,
-                    unreadable: None,
-                    children: vec![],
-                };
-                match ltp::read_node_pc(&mut store, node) {
-                    Ok(pc) => {
-                        if let Some(ltp::Value::Str(name)) = pc.props.get(&ltp::PID_DISPLAY_NAME) {
-                            folder.name = name.clone();
-                        }
-                    }
-                    Err(_) => {
-                        folder.unreadable = Some("Folder properties could not be read.".into())
-                    }
-                }
-                for item in items_by_folder.get(&node.nid).into_iter().flatten() {
-                    folder.item_count += 1;
-                    match item_properties(&mut store, item) {
-                        Ok(pc) => match pc.props.get(&ltp::PID_MESSAGE_SIZE) {
-                            Some(ltp::Value::Int(size)) if *size >= 0 => {
-                                folder.bytes = folder.bytes.saturating_add(*size as u64)
-                            }
-                            _ => {
-                                folder.unreadable =
-                                    Some("An Item has no readable size property.".into())
-                            }
-                        },
-                        Err(e) => {
-                            if e.is::<std::io::Error>() {
-                                return Err(error(
-                                    ErrorKind::Io,
-                                    format!("Table staging failed: {e}"),
-                                ));
-                            }
-                            folder.unreadable = Some("One or more Items could not be read.".into())
-                        }
-                    }
-                }
-                for table in tables_by_folder
-                    .get(&(node.nid & !31))
-                    .into_iter()
-                    .flatten()
-                {
-                    if let Err(e) =
-                        crate::writer::validate_table(&mut store, table.bid_data, table.bid_sub)
-                    {
-                        if e.is::<std::io::Error>() {
-                            return Err(error(ErrorKind::Io, format!("Table staging failed: {e}")));
-                        }
-                        folder.unreadable = Some("A folder table could not be read.".into());
-                    }
-                }
-                // MS-PST's root folder points to itself. That one self-reference
-                // terminates the hierarchy; every other cycle remains damage.
-                let parent = if node.nid == ltp::NID_ROOT_FOLDER && node.nid_parent == node.nid {
-                    0
-                } else {
-                    node.nid_parent
-                };
-                children_by_parent.entry(parent).or_default().push(node.nid);
-                parents.insert(node.nid, parent);
-                flat.insert(node.nid, folder);
-            }
-            // A cycle is damage, not an excuse to silently hide folders or recurse forever.
-            let mut resolved = HashSet::new();
-            for &id in flat.keys() {
-                let mut seen = HashSet::new();
-                let mut current = id;
-                while flat.contains_key(&current) && !resolved.contains(&current) {
-                    if !seen.insert(current) {
-                        return Err(error(
-                            ErrorKind::DamagedSource,
-                            "The folder hierarchy contains a cycle.",
-                        ));
-                    }
-                    current = parents[&current];
-                }
-                resolved.extend(seen);
-            }
-            let roots: Vec<_> = flat
-                .keys()
-                .copied()
-                .filter(|id| !flat.contains_key(&parents[id]))
-                .collect();
-            // Iterative assembly keeps hostile folder depth off the call stack.
-            let mut pending: Vec<_> = roots.iter().map(|&id| (id, false)).collect();
-            let mut built = BTreeMap::new();
-            while let Some((id, visited)) = pending.pop() {
-                if visited {
-                    let mut folder = flat.remove(&id).expect("indexed folder");
-                    let children = children_by_parent.remove(&id).unwrap_or_default();
-                    for child in children {
-                        if let Some(folder_child) = built.remove(&child) {
-                            folder.children.push(folder_child);
-                        }
-                    }
-                    built.insert(id, folder);
-                } else {
-                    pending.push((id, true));
-                    pending.extend(
-                        children_by_parent
-                            .get(&id)
-                            .into_iter()
-                            .flatten()
-                            .map(|&child| (child, false)),
-                    );
-                }
-            }
-            for id in roots {
-                folders.push(built.remove(&id).expect("built root"));
-            }
+            return inspect_nodes(path, &mut store, &nodes);
         }
-    }
+    };
     Ok(Inspection {
         source: path.into(),
         support,
+        folders,
+    })
+}
+
+// Conversion borrows its already classified source and node inventory. No second
+// read-only handle, node vector or source block cache is opened for inspection.
+pub(crate) fn inspect_nodes(
+    path: &Path,
+    store: &mut Pst,
+    nodes: &[pstoff_format::ndb::Node],
+) -> Result<Inspection, EngineError> {
+    let mut folders = Vec::new();
+    let mut flat = BTreeMap::new();
+    let mut parents = BTreeMap::new();
+    let mut children_by_parent: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for node in nodes
+        .iter()
+        .filter(|n| n.nid_type() == 2 || n.nid_type() == 3)
+    {
+        let mut folder = Folder {
+            id: FolderRef(node.nid),
+            name: String::new(),
+            item_count: 0,
+            bytes: 0,
+            unreadable: None,
+            children: vec![],
+        };
+        match crate::writer::evidence_properties(
+            store,
+            node.bid_data,
+            node.bid_sub,
+            &[ltp::PID_DISPLAY_NAME],
+            &crate::CancelToken::default(),
+        ) {
+            Ok(mut pc) => {
+                if let Some(ltp::Value::Str(name)) = pc.props.remove(&ltp::PID_DISPLAY_NAME) {
+                    folder.name = name;
+                }
+            }
+            Err(e) if e.is::<std::io::Error>() => {
+                return Err(error(
+                    ErrorKind::Io,
+                    format!("Property staging failed: {e}"),
+                ));
+            }
+            Err(_) => folder.unreadable = Some("Folder properties could not be read.".into()),
+        }
+        for item in nodes
+            .iter()
+            .filter(|n| n.nid_type() == 4 && n.nid_parent == node.nid)
+        {
+            folder.item_count += 1;
+            match item_properties(store, item) {
+                Ok(pc) => match pc.props.get(&ltp::PID_MESSAGE_SIZE) {
+                    Some(ltp::Value::Int(size)) if *size >= 0 => {
+                        folder.bytes = folder.bytes.saturating_add(*size as u64)
+                    }
+                    _ => folder.unreadable = Some("An Item has no readable size property.".into()),
+                },
+                Err(e) => {
+                    if e.is::<std::io::Error>() {
+                        return Err(error(ErrorKind::Io, format!("Table staging failed: {e}")));
+                    }
+                    folder.unreadable = Some("One or more Items could not be read.".into())
+                }
+            }
+        }
+        for table in nodes
+            .iter()
+            .filter(|n| matches!(n.nid_type(), 0x0d..=0x0f) && n.nid & !31 == node.nid & !31)
+        {
+            if let Err(e) = crate::writer::validate_table(store, table.bid_data, table.bid_sub) {
+                if e.is::<std::io::Error>() {
+                    return Err(error(ErrorKind::Io, format!("Table staging failed: {e}")));
+                }
+                folder.unreadable = Some("A folder table could not be read.".into());
+            }
+        }
+        // MS-PST's root folder points to itself. That one self-reference
+        // terminates the hierarchy; every other cycle remains damage.
+        let parent = if node.nid == ltp::NID_ROOT_FOLDER && node.nid_parent == node.nid {
+            0
+        } else {
+            node.nid_parent
+        };
+        children_by_parent.entry(parent).or_default().push(node.nid);
+        parents.insert(node.nid, parent);
+        flat.insert(node.nid, folder);
+    }
+    // A cycle is damage, not an excuse to silently hide folders or recurse forever.
+    for &id in flat.keys() {
+        // Floyd's walk needs no folder-count-sized visited/resolved sets.
+        let parent = |id| parents.get(&id).copied().filter(|p| flat.contains_key(p));
+        let mut slow = parent(id);
+        let mut fast = parent(id).and_then(parent);
+        while let (Some(s), Some(f)) = (slow, fast) {
+            if s == f {
+                return Err(error(
+                    ErrorKind::DamagedSource,
+                    "The folder hierarchy contains a cycle.",
+                ));
+            }
+            slow = parent(s);
+            fast = parent(f).and_then(parent);
+        }
+    }
+    let roots: Vec<_> = flat
+        .keys()
+        .copied()
+        .filter(|id| !flat.contains_key(&parents[id]))
+        .collect();
+    // Iterative assembly keeps hostile folder depth off the call stack.
+    let mut pending: Vec<_> = roots.iter().map(|&id| (id, false)).collect();
+    let mut built = BTreeMap::new();
+    while let Some((id, visited)) = pending.pop() {
+        if visited {
+            let mut folder = flat.remove(&id).expect("indexed folder");
+            let children = children_by_parent.remove(&id).unwrap_or_default();
+            for child in children {
+                if let Some(folder_child) = built.remove(&child) {
+                    folder.children.push(folder_child);
+                }
+            }
+            built.insert(id, folder);
+        } else {
+            pending.push((id, true));
+            pending.extend(
+                children_by_parent
+                    .get(&id)
+                    .into_iter()
+                    .flatten()
+                    .map(|&child| (child, false)),
+            );
+        }
+    }
+    for id in roots {
+        folders.push(built.remove(&id).expect("built root"));
+    }
+    Ok(Inspection {
+        source: path.into(),
+        support: Support::Supported,
         folders,
     })
 }

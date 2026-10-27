@@ -63,7 +63,7 @@ fn selected_evidence(evidence: &mut Evidence, excluded: &HashSet<u32>) {
             if unchecked.is_empty() {
                 *evidence = Evidence::Checked {
                     count: *count,
-                    references: references.clone(),
+                    references: std::mem::take(references),
                 };
             }
         }
@@ -118,21 +118,36 @@ impl Selection {
                 break;
             }
         }
-        let ids: HashSet<_> = items.iter().map(|n| n.nid).collect();
-        let mut part = self.recovery.clone();
-        part.nodes.retain(|n| match n.nid_type() {
-            2 | 3 => folders.contains(&n.nid),
-            4 | 8 => ids.contains(&n.nid),
-            0xd..=0x10 => folders.iter().any(|id| id & !31 == n.nid & !31),
-            _ => true,
-        });
-        let retained: HashSet<_> = part.nodes.iter().map(|n| n.nid).collect();
+        let mut part = writer::Recovery {
+            nodes: all
+                .iter()
+                .filter(|n| match n.nid_type() {
+                    2 | 3 => folders.contains(&n.nid),
+                    4 | 8 => items.binary_search_by_key(&n.nid, |n| n.nid).is_ok(),
+                    0xd..=0x10 => folders.iter().any(|id| id & !31 == n.nid & !31),
+                    _ => true,
+                })
+                .cloned()
+                .collect(),
+            system: self.recovery.system.clone(),
+            created: self.recovery.created.clone(),
+            omitted: self.recovery.omitted.clone(),
+            // Evidence belongs to the conversion report, never to a candidate
+            // Split part. Copying it here multiplies item-count ownership.
+            skipped: Vec::new(),
+            evidence: CompletenessEvidence {
+                headers_only: Evidence::NotChecked,
+                unreadable: Evidence::NotChecked,
+                external_references: Evidence::NotChecked,
+            },
+        };
         part.omitted.extend(
             all.iter()
-                .filter(|n| !retained.contains(&n.nid))
+                .filter(|n| !part.nodes.iter().any(|kept| kept.nid == n.nid))
                 .map(|n| n.nid),
         );
-        part.created.retain(|id, _| retained.contains(id));
+        part.created
+            .retain(|id, _| part.nodes.iter().any(|n| n.nid == *id));
         part
     }
 }

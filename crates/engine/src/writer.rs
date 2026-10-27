@@ -4,6 +4,7 @@ mod recovery;
 pub(super) use recovery::prepare as recover;
 pub(crate) use recovery::Recovery;
 mod context;
+pub(crate) use context::evidence_properties;
 mod spool;
 mod store;
 mod system;

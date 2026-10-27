@@ -37,9 +37,15 @@ pub(super) fn convert(
             "Split limit must be greater than zero.",
         ));
     }
-    reader::inspect(path)?;
+    reader::inspect_nodes(path, &mut source, &nodes)?;
     let excluded = planner::excluded(&nodes, &options.exclusions)?;
-    let recovery = writer::recover(&mut source, &nodes, cancel).map_err(|error| {
+    let recovery = writer::recover(&mut source, nodes, cancel);
+    if cancel.is_cancelled() {
+        return Ok(Conversion::Cancelled {
+            completed_files: vec![],
+        });
+    }
+    let recovery = recovery.map_err(|error| {
         failure(
             if error.is::<std::io::Error>() {
                 ErrorKind::Io
@@ -78,7 +84,7 @@ pub(super) fn convert(
     fs::create_dir_all(&options.destination).map_err(io_failure)?;
     flag_staging(&options.destination)?;
     let selected = selection.part(&selection.items, split);
-    let selected_folders = folder_mapping(&mut source, &selected, 1);
+    let selected_folders = folder_mapping(&mut source, &selected, 1)?;
     preflight_space(
         path,
         &options.destination,
@@ -202,7 +208,7 @@ pub(super) fn convert(
                 part,
             });
             let planned = selection.part(&selection.items[start..accepted_end], split);
-            folders.extend(folder_mapping(&mut source, &planned, part));
+            folders.extend(folder_mapping(&mut source, &planned, part)?);
             differences.append(&mut accepted_differences);
             if final_part {
                 break;
@@ -264,7 +270,7 @@ fn folder_mapping(
     source: &mut pstoff_format::ndb::Pst,
     planned: &writer::Recovery,
     part: u32,
-) -> Vec<FolderPart> {
+) -> Result<Vec<FolderPart>, EngineError> {
     let mut folders = vec![];
     for folder in planned
         .nodes
@@ -281,7 +287,22 @@ fn folder_mapping(
             count += 1;
             // Recovery already validated nested contexts. Report mapping needs
             // only this Item's size, so do not stage its tables again here.
-            if let Ok(pc) = pstoff_format::ltp::read_node_pc(source, item) {
+            let pc = writer::evidence_properties(
+                source,
+                item.bid_data,
+                item.bid_sub,
+                &[pstoff_format::ltp::PID_MESSAGE_SIZE],
+                &CancelToken::default(),
+            );
+            if let Err(e) = &pc {
+                if e.is::<std::io::Error>() {
+                    return Err(failure(
+                        ErrorKind::Io,
+                        format!("Property staging failed: {e}"),
+                    ));
+                }
+            }
+            if let Ok(pc) = pc {
                 if let Some(pstoff_format::ltp::Value::Int(size)) = pc.props.get(&0x0e08) {
                     bytes = bytes.saturating_add((*size).max(0) as u64);
                 }
@@ -294,7 +315,7 @@ fn folder_mapping(
             bytes,
         });
     }
-    folders
+    Ok(folders)
 }
 
 // MoveFileExW without REPLACE_EXISTING atomically renames without overwriting.
