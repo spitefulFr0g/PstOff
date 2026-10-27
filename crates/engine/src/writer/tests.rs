@@ -1,11 +1,11 @@
 use super::*;
 use std::io::Read;
-mod allocations;
+pub(super) mod allocations;
 #[path = "../../tests/support/mod.rs"]
-mod support;
+pub(super) mod support;
 #[allow(dead_code)]
 #[path = "../../tests/support/synthetic.rs"]
-mod synthetic;
+pub(super) mod synthetic;
 mod tables;
 
 #[test]
@@ -57,7 +57,7 @@ fn source_payload_relocation_is_selective_ordered_and_cancellable() {
         nodes: vec![],
         differences: vec![],
         highwater: 1024,
-        planned: Default::default(),
+        planned: cache::Plan::new().unwrap(),
         omitted: Default::default(),
         created: Default::default(),
     };

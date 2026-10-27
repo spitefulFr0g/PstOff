@@ -115,7 +115,25 @@ pub(super) fn read(
     }
     result
 }
+pub(super) fn policy_read(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    cancel: &crate::CancelToken,
+    blob: &mut super::cache::Blob,
+) -> Result<Table> {
+    read_inner_mode(source, bid, sub, cancel, Some(blob))
+}
 fn read_inner(source: &mut Pst, bid: u64, sub: u64, cancel: &crate::CancelToken) -> Result<Table> {
+    read_inner_mode(source, bid, sub, cancel, None)
+}
+fn read_inner_mode(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    cancel: &crate::CancelToken,
+    mut blob: Option<&mut super::cache::Blob>,
+) -> Result<Table> {
     let mut blocks = Blocks::new()?;
     for chunk in source.node_chunks(bid)? {
         if cancel.is_cancelled() {
@@ -293,6 +311,26 @@ fn read_inner(source: &mut Pst, bid: u64, sub: u64, cancel: &crate::CancelToken)
                     continue;
                 }
                 let kind = *tag as u16;
+                let policy = matches!(tag >> 16, 0x3008 | 0x65e2 | 0x65e3);
+                if blob.is_some() && !policy && !matches!(*tag, 0x67f20003 | 0x67f30003) {
+                    // Preserve pre-output validation of non-policy cache values
+                    // without retaining their payloads in the planner.
+                    if variable(kind) {
+                        let hnid = u32at(row, *at)?;
+                        if hnid & 31 == 0 {
+                            heap.item(hnid)?;
+                        } else {
+                            let bid = subs.get(&hnid).ok_or("Missing table payload")?.data;
+                            for chunk in source.node_chunks(bid)? {
+                                if cancel.is_cancelled() {
+                                    return Err("Cancelled table read".into());
+                                }
+                                chunk?;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let bytes = if variable(kind) {
                     let hnid = u32at(row, *at)?;
                     if matches!(tag >> 16, 0x65e2 | 0x65e3) && structural.get(hnid)?.is_some() {
@@ -303,20 +341,51 @@ fn read_inner(source: &mut Pst, bid: u64, sub: u64, cancel: &crate::CancelToken)
                     } else if hnid & 31 == 0 {
                         heap.item(hnid)?
                     } else {
-                        // Policy/table cells still own their value, but do not
-                        // also retain every decoded block before concatenation.
+                        // Emission owns the current cell; planning copies chunks
+                        // to disk. Neither retains a decoded block collection.
                         let bid = subs.get(&hnid).ok_or("Missing table payload")?.data;
+                        let start = blob.as_ref().map(|b| b.len());
                         let mut bytes = Vec::new();
                         for chunk in source.node_chunks(bid)? {
                             if cancel.is_cancelled() {
                                 return Err("Cancelled table read".into());
                             }
-                            bytes.extend_from_slice(&chunk?);
+                            let chunk = chunk?;
+                            if let Some(blob) = blob.as_deref_mut() {
+                                blob.append(&chunk)?;
+                            } else {
+                                bytes.extend_from_slice(&chunk);
+                            }
+                        }
+                        if let Some(start) = start {
+                            let value = super::cache::Value {
+                                kind,
+                                at: start,
+                                len: blob.as_ref().unwrap().len() - start,
+                            };
+                            cells.insert(
+                                *tag,
+                                Cell {
+                                    kind,
+                                    bytes: value.encode().to_vec(),
+                                    subnode: None,
+                                },
+                            );
+                            continue;
                         }
                         bytes
                     }
                 } else {
                     row[*at..at + size].to_vec()
+                };
+                let bytes = if policy {
+                    if let Some(blob) = blob.as_deref_mut() {
+                        blob.put(kind, &bytes)?.encode().to_vec()
+                    } else {
+                        bytes
+                    }
+                } else {
+                    bytes
                 };
                 cells.insert(
                     *tag,
@@ -346,7 +415,7 @@ fn read_inner(source: &mut Pst, bid: u64, sub: u64, cancel: &crate::CancelToken)
 impl Table {
     pub fn rebuild_contents(
         &mut self,
-        planned: &BTreeMap<u32, Properties>,
+        mut properties: impl FnMut(u32) -> Result<Properties>,
         nodes: &[Node],
         nid: u32,
         differences: &mut Vec<Difference>,
@@ -356,7 +425,7 @@ impl Table {
                 .iter()
                 .find(|n| n.nid == *row)
                 .ok_or("Contents row has no Item")?;
-            let own = planned.get(row).ok_or("Missing planned Item properties")?;
+            let own = properties(*row)?;
             for (tag, _) in &self.columns {
                 let id = (tag >> 16) as u16;
                 let kind = *tag as u16;

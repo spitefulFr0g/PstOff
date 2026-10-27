@@ -59,7 +59,7 @@ struct Output {
     nodes: Vec<Node>,
     differences: Vec<crate::Difference>,
     highwater: u32,
-    planned: std::collections::BTreeMap<u32, context::Properties>,
+    planned: cache::Plan,
     omitted: std::collections::HashSet<u32>,
     created: std::collections::BTreeMap<u32, String>,
 }
@@ -361,10 +361,37 @@ impl Output {
                 }
             }
             if matches!(nid & 31, 0x0e..=0x10) {
+                let table_tags = table
+                    .as_ref()
+                    .ok_or("Contents node is not a table")?
+                    .columns
+                    .iter()
+                    .map(|c| c.0)
+                    .collect::<std::collections::BTreeSet<_>>();
                 table
                     .as_mut()
                     .ok_or("Contents node is not a table")?
-                    .rebuild_contents(&self.planned, &self.nodes, nid, &mut self.differences)?;
+                    .rebuild_contents(
+                        |item| {
+                            let node = self
+                                .nodes
+                                .iter()
+                                .find(|n| n.nid == item)
+                                .ok_or("Missing indexed Item")?;
+                            let mut cells = context::selected_properties(
+                                source,
+                                node.bid_data,
+                                node.bid_sub,
+                                &table_tags,
+                                &self.cancel,
+                            )?;
+                            self.planned.apply(item, &mut cells)?;
+                            Ok(cells)
+                        },
+                        &self.nodes,
+                        nid,
+                        &mut self.differences,
+                    )?;
             }
             let mut entries = vec![];
             let mut subs: Vec<_> = source.subnodes(sub)?.into_iter().collect();
@@ -568,8 +595,13 @@ pub(super) fn write(
             Some(cells)
         } else if node.nid == 0x21 {
             Some(store_cells.clone())
+        } else if matches!(node.nid_type(), 4 | 8) {
+            let mut cells =
+                context::relocation_properties(source, node.bid_data, node.bid_sub, cancel)?;
+            out.planned.apply(node.nid, &mut cells)?;
+            Some(cells)
         } else {
-            out.planned.get(&node.nid).cloned()
+            None
         };
         let generated_table = matches!(node.nid_type(), 0xd..=0xf)
             && recovery.created.keys().any(|id| id & !31 == node.nid & !31);

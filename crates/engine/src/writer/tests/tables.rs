@@ -11,7 +11,7 @@ fn output(path: &Path) -> Output {
         nodes: vec![],
         differences: vec![],
         highwater: 1024,
-        planned: Default::default(),
+        planned: cache::Plan::new().unwrap(),
         omitted: Default::default(),
         created: Default::default(),
     }
@@ -42,7 +42,10 @@ fn emit(path: &Path, table: &mut table::Table) {
     p64(&mut entry, 0, 0x12e);
     p64(&mut entry, 8, data);
     p64(&mut entry, 16, sub);
-    let nbt = out.tree(vec![(0x12e, entry)], 0x81, 32).unwrap();
+    finish(out, vec![(0x12e, entry)]);
+}
+fn finish(mut out: Output, entries: Vec<(u64, Vec<u8>)>) {
+    let nbt = out.tree(entries, 0x81, 32).unwrap();
     let blocks = std::mem::take(&mut out.blocks);
     let bbt = out.tree(blocks, 0x80, 24).unwrap();
     let eof = out.pos.div_ceil(512) * 512;
@@ -225,7 +228,7 @@ fn q16_preserves_versions_and_exact_types_through_row_spool() {
     let mut differences = vec![];
     table
         .rebuild_contents(
-            &planned,
+            |item| Ok(planned.get(&item).unwrap().clone()),
             &[pstoff_format::ndb::Node {
                 nid: 0x104,
                 nid_parent: 0x122,
@@ -304,4 +307,193 @@ fn row_rewrite_rolls_back_errors_and_emission_stops_on_cancellation() {
         .unwrap();
     assert_eq!(calls, 1);
     assert_eq!(root, 0);
+}
+
+// File-backed multi-Item/search-table fixture. Generation and independent
+// readback are outside planner allocation measurements.
+fn planner_source(
+    path: &Path,
+    items: u32,
+    occurrences: u32,
+    pcl_entries: u32,
+    conflict: Option<u32>,
+) {
+    let mut out = output(path);
+    let mut entries = vec![];
+    let mut add = |nid: u32, data: u64, sub: u64| {
+        let mut entry = vec![0; 32];
+        p64(&mut entry, 0, u64::from(nid));
+        p64(&mut entry, 8, data);
+        p64(&mut entry, 16, sub);
+        p32(&mut entry, 24, 0x122);
+        entries.push((u64::from(nid), entry));
+    };
+    for item in 0..items {
+        let mut heap = context::HeapBuilder::new(0xbc).unwrap();
+        let root =
+            context::pc(&BTreeMap::new(), &mut heap, |_| panic!("empty PC payload")).unwrap();
+        let data = out
+            .stream_chunks(
+                &mut heap.finish(root, &Default::default()).unwrap().iter(),
+                true,
+            )
+            .unwrap();
+        add((item + 0x100) * 32 + 4, data, 0);
+    }
+    let mut key = vec![0; 24];
+    key[23] = 1;
+    let mut pcl = vec![];
+    for i in 0..pcl_entries {
+        pcl.push(24);
+        let mut xid = [0; 24];
+        xid[..4].copy_from_slice(&i.to_be_bytes());
+        xid[23] = 1;
+        pcl.extend(xid);
+    }
+    for occurrence in 0..occurrences {
+        let mut table = table::empty(vec![]).unwrap();
+        for tag in [0x30080040, 0x65e20102, 0x65e30102] {
+            table
+                .columns
+                .push((tag, if tag == 0x30080040 { 8 } else { 4 }));
+        }
+        for item in 0..items {
+            table.add_identity_row((item + 0x100) * 32 + 4).unwrap();
+        }
+        table
+            .rows
+            .rewrite(|(_, _, cells)| {
+                for (tag, bytes) in [
+                    (0x30080040, 42u64.to_le_bytes().to_vec()),
+                    (0x65e20102, key.clone()),
+                    (0x65e30102, pcl.clone()),
+                ] {
+                    let mut bytes = bytes;
+                    if conflict == Some(tag) && occurrence + 1 == occurrences {
+                        *bytes.last_mut().unwrap() = 2;
+                    }
+                    cells.insert(
+                        tag,
+                        context::Cell {
+                            kind: tag as u16,
+                            bytes,
+                            subnode: None,
+                        },
+                    );
+                }
+                Ok(true)
+            })
+            .unwrap();
+        let mut heap = context::HeapBuilder::new(0x7c).unwrap();
+        let mut subs = vec![];
+        let root = table
+            .build(&mut heap, |chunks| {
+                let nid = ((subs.len() as u32 + 1) << 5) | 0x1f;
+                let bid = out.stream_chunks(chunks, true)?;
+                subs.push((nid, bid, 0));
+                Ok(nid)
+            })
+            .unwrap();
+        let sub = out.subentries(&subs).unwrap();
+        let data = out
+            .stream_chunks(
+                &mut heap.finish(root, &Default::default()).unwrap().iter(),
+                true,
+            )
+            .unwrap();
+        add((occurrence + 0x200) * 32 + 0x10, data, sub);
+    }
+    entries.sort_by_key(|e| e.0);
+    finish(out, entries);
+}
+#[test]
+fn planner_streams_large_pcl_occurrences_and_rejects_last_occurrence_conflict() {
+    use sha2::{Digest, Sha256};
+    let fixture = support::Fixture::invalid();
+    for conflict in [None, Some(0x65e30102), Some(0x30080040)] {
+        planner_source(&fixture.source, 2, 3, 90_000, conflict);
+        let before = Sha256::digest(std::fs::read(&fixture.source).unwrap());
+        let mut source = Pst::from_file(File::open(&fixture.source).unwrap()).unwrap();
+        let nodes = source.nodes();
+        let mut differences = vec![];
+        let (result, peak) = allocations::measure(|| {
+            cache::prepare(
+                &mut source,
+                &nodes,
+                &mut differences,
+                &Default::default(),
+                &Default::default(),
+            )
+        });
+        assert!(peak < 1024 * 1024, "large-PCL planner allocation {peak}");
+        if let Some(tag) = conflict {
+            let error = result
+                .err()
+                .expect("last occurrence conflict accepted")
+                .to_string();
+            let policy = if tag == 0x65e30102 { "Q15" } else { "Q12" };
+            assert!(error.contains(&format!("{policy} conflict")), "{error}");
+            if tag == 0x65e30102 {
+                assert!(error.contains("65e30102"), "{error}");
+            }
+        } else {
+            let mut plan = result.unwrap().unwrap();
+            assert_eq!(differences.len(), 6);
+            // Decisions reproduce the complete PCL; no source-local reference
+            // is carried into another namespace.
+            for node in nodes.iter().filter(|n| n.nid_type() == 4) {
+                let mut cells = BTreeMap::new();
+                plan.apply(node.nid, &mut cells).unwrap();
+                assert_eq!(cells[&0x65e3].bytes.len(), 2_250_000);
+                let mut expected = Sha256::new();
+                for i in 0u32..90_000 {
+                    let mut xid = [0; 25];
+                    xid[0] = 24;
+                    xid[1..5].copy_from_slice(&i.to_be_bytes());
+                    xid[24] = 1;
+                    expected.update(xid);
+                }
+                assert_eq!(Sha256::digest(&cells[&0x65e3].bytes), expected.finalize());
+                assert_eq!(cells[&0x3008].bytes, 42u64.to_le_bytes());
+                assert!(cells[&0x65e3].subnode.is_none());
+            }
+        }
+        drop(source);
+        assert_eq!(
+            before,
+            Sha256::digest(std::fs::read(&fixture.source).unwrap())
+        );
+    }
+}
+#[test]
+fn planner_checks_all_search_occurrences_with_growing_item_counts() {
+    let fixture = support::Fixture::invalid();
+    for items in [16, 128, 1024] {
+        planner_source(&fixture.source, items, 32, 1, None);
+        let mut source = Pst::from_file(File::open(&fixture.source).unwrap()).unwrap();
+        let nodes = source.nodes();
+        let mut differences = vec![];
+        let (result, peak) = allocations::measure(|| {
+            cache::prepare(
+                &mut source,
+                &nodes,
+                &mut differences,
+                &Default::default(),
+                &Default::default(),
+            )
+        });
+        let mut plan = result.unwrap().unwrap();
+        // This scope includes the acknowledged, count-dependent report Vec.
+        assert!(
+            peak < 2 * 1024 * 1024,
+            "{items} Items/32 occurrences allocation {peak}"
+        );
+        assert_eq!(differences.len(), items as usize * 3);
+        for node in nodes.iter().filter(|n| n.nid_type() == 4) {
+            let mut cells = BTreeMap::new();
+            plan.apply(node.nid, &mut cells).unwrap();
+            assert_eq!(cells[&0x65e3].bytes.len(), 25);
+            assert_eq!(cells[&0x3008].bytes, 42u64.to_le_bytes());
+        }
+    }
 }

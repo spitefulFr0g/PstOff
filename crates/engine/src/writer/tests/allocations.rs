@@ -40,7 +40,7 @@ unsafe impl GlobalAlloc for Tracked {
 }
 #[global_allocator]
 static ALLOCATOR: Tracked = Tracked;
-pub(super) fn measure<T>(run: impl FnOnce() -> T) -> (T, usize) {
+pub(in crate::writer) fn measure<T>(run: impl FnOnce() -> T) -> (T, usize) {
     let baseline = LIVE.with(Cell::get);
     PEAK.with(|peak| peak.set(baseline));
     let value = run();

@@ -4,6 +4,9 @@ Based on `1ad8b1f` (parent `31d31d9`). Generated data only. Neither the
 16 MiB shared payload reservation target nor a whole-process private-commit
 ceiling is closed by this slice.
 
+For the subsequent disk-backed Item planner and current remaining owners, see
+[the planner follow-up](issue-32-item-planner.md).
+
 ## Implemented storage boundary
 
 `writer/table_storage.rs` stores source heap blocks, row matrix blocks, block
