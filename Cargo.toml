@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/engine", "crates/cli", "crates/gui", "third-party/pstfree"]
+members = ["crates/engine", "crates/cli", "crates/gui", "third-party/pstfree", "third-party/outlook-pst"]
 default-members = ["crates/engine", "crates/cli"]
 
 [workspace.package]
@@ -11,5 +11,5 @@ rust-version = "1.89"
 
 [workspace.dependencies]
 pstoff-engine = { path = "crates/engine" }
-outlook-pst = { git = "https://github.com/microsoft/outlook-pst-rs", rev = "cfb721daee538acc50d2bad6faac5ce724f6037d" }
+outlook-pst = { path = "third-party/outlook-pst" }
 serde = { version = "=1.0.228", features = ["derive"] }

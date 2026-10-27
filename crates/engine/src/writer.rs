@@ -11,7 +11,7 @@ mod table;
 mod table_storage;
 #[cfg(test)]
 mod tests;
-use outlook_pst::{PstFile, UnicodePstFile};
+use outlook_pst::UnicodePstFile;
 use pstoff_format::ndb::{crc32, Node, Pst};
 use std::{
     fs::File,
@@ -50,20 +50,20 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub(super) fn validate_table(source: &mut Pst, bid: u64, sub: u64) -> Result<()> {
     table::inspect(source, bid, sub)
 }
-struct Output {
+struct Output<'a> {
     cancel: crate::CancelToken,
     file: File,
     pos: u64,
     next: u64,
-    blocks: Vec<(u64, Vec<u8>)>,
-    nodes: Vec<Node>,
+    blocks: spool::Spool,
+    nodes: &'a [Node],
     differences: Vec<crate::Difference>,
     highwater: u32,
     planned: cache::Plan,
     omitted: std::collections::HashSet<u32>,
     created: std::collections::BTreeMap<u32, String>,
 }
-impl Output {
+impl Output<'_> {
     // Reserve allocation-map slots, including PMAP/FMAP/FPMAP when applicable.
     fn place(&mut self, size: usize, align: u64) -> u64 {
         let mut at = self.pos.div_ceil(align) * align;
@@ -128,7 +128,7 @@ impl Output {
         p64(&mut entry, 8, at);
         p16(&mut entry, 16, bytes.len() as u16);
         p16(&mut entry, 18, 2);
-        self.blocks.push((id, entry));
+        self.blocks.append(&entry)?;
         Ok(id)
     }
     fn array(&mut self, parts: &[(u64, u64)], level: u8) -> Result<u64> {
@@ -388,7 +388,7 @@ impl Output {
                             self.planned.apply(item, &mut cells)?;
                             Ok(cells)
                         },
-                        &self.nodes,
+                        self.nodes,
                         nid,
                         &mut self.differences,
                     )?;
@@ -434,23 +434,35 @@ impl Output {
             Ok((data, self.subtree(source, sub, depth + 1)?))
         }
     }
+    // Every level is a fixed-width disk stream. Only one page and one
+    // parent record are resident, independent of the number of entries.
     fn tree(
         &mut self,
-        mut entries: Vec<(u64, Vec<u8>)>,
+        mut entries: spool::Spool,
         kind: u8,
         mut width: usize,
     ) -> Result<(u64, u64)> {
-        let mut level = 0;
+        let mut level = 0u8;
         loop {
-            let mut parents = Vec::new();
-            for group in entries.chunks(488 / width) {
+            if entries.len == 0 || !entries.len.is_multiple_of(width as u64) {
+                return Err("Empty or truncated output index".into());
+            }
+            let mut parents = spool::Spool::new()?;
+            let mut offset = 0;
+            let mut root = (0, 0);
+            while offset < entries.len {
+                if self.cancel.is_cancelled() {
+                    return Err("Output index emission cancelled".into());
+                }
+                let count =
+                    ((entries.len - offset) / width as u64).min((488 / width) as u64) as usize;
                 let at = self.place(512, 512);
                 let id = self.id(false);
-                let mut b = vec![0; 512];
-                for (i, (_, entry)) in group.iter().enumerate() {
-                    b[i * width..(i + 1) * width].copy_from_slice(entry);
-                }
-                b[488] = group.len() as u8;
+                let mut b = [0; 512];
+                entries.read(offset, &mut b[..count * width])?;
+                offset += (count * width) as u64;
+                let key = u64::from_le_bytes(b[..8].try_into()?);
+                b[488] = count as u8;
                 b[489] = (488 / width) as u8;
                 b[490] = width as u8;
                 b[491] = level;
@@ -461,27 +473,37 @@ impl Output {
                 p32(&mut b, 500, crc);
                 p64(&mut b, 504, id);
                 self.write(at, &b)?;
-                let mut parent = vec![0; 24];
-                p64(&mut parent, 0, group[0].0);
+                let mut parent = [0; 24];
+                p64(&mut parent, 0, key);
                 p64(&mut parent, 8, id);
                 p64(&mut parent, 16, at);
-                parents.push((group[0].0, parent));
+                parents.append(&parent)?;
+                root = (id, at);
             }
-            if parents.len() == 1 {
-                let b = &parents[0].1;
-                return Ok((
-                    u64::from_le_bytes(b[8..16].try_into()?),
-                    u64::from_le_bytes(b[16..24].try_into()?),
-                ));
-            }
-            if parents.is_empty() {
-                return Err("An empty index cannot be published".into());
+            if parents.len == 24 {
+                return Ok(root);
             }
             entries = parents;
             width = 24;
-            level += 1;
+            level = level.checked_add(1).ok_or("Output index depth overflow")?;
         }
     }
+}
+
+// Sort fixed-width NBT records by their disk-indexed NID without retaining nodes.
+fn ordered_nodes(
+    mut entries: spool::Spool,
+    mut order: spool::Index,
+    cancel: &crate::CancelToken,
+) -> Result<spool::Spool> {
+    let mut sorted = spool::Spool::new()?;
+    order.visit(cancel, |_, offset| {
+        let mut entry = [0; 32];
+        entries.read(offset, &mut entry)?;
+        sorted.append(&entry)?;
+        Ok(())
+    })?;
+    Ok(sorted)
 }
 
 pub(super) fn write(
@@ -536,15 +558,16 @@ pub(super) fn write(
         file,
         pos: AMAP + 2048,
         next: 1,
-        blocks: vec![],
-        nodes: nodes.to_vec(),
+        blocks: spool::Spool::new()?,
+        nodes,
         differences,
         highwater: 1024,
         planned,
         omitted: omitted.clone(),
         created: recovery.created.clone(),
     };
-    let mut entries = Vec::new();
+    let mut entries = spool::Spool::new()?;
+    let mut order = spool::Index::new()?;
     for node in nodes {
         if cancel.is_cancelled() {
             return Ok(None);
@@ -651,7 +674,10 @@ pub(super) fn write(
         p64(&mut entry, 8, data);
         p64(&mut entry, 16, sub);
         p32(&mut entry, 24, node.nid_parent);
-        entries.push((node.nid as u64, entry));
+        let offset = entries.append(&entry)?;
+        if order.insert(node.nid, offset)?.is_some() {
+            return Err("Duplicate output NID".into());
+        }
         if matches!(node.nid_type(), 4 | 8) {
             done += 1;
             progress.update(crate::Progress {
@@ -666,10 +692,19 @@ pub(super) fn write(
     if cancel.is_cancelled() {
         return Ok(None);
     }
-    entries.sort_by_key(|e| e.0);
-    let nbt = out.tree(entries, 0x81, 32)?;
-    let blocks = std::mem::take(&mut out.blocks);
-    let bbt = out.tree(blocks, 0x80, 24)?;
+    let sorted = ordered_nodes(entries, order, cancel)?;
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
+    let nbt = match out.tree(sorted, 0x81, 32) {
+        Err(_) if cancel.is_cancelled() => return Ok(None),
+        result => result?,
+    };
+    let blocks = std::mem::replace(&mut out.blocks, spool::Spool::new()?);
+    let bbt = match out.tree(blocks, 0x80, 24) {
+        Err(_) if cancel.is_cancelled() => return Ok(None),
+        result => result?,
+    };
     let eof = out.pos.div_ceil(512) * 512;
     out.file.set_len(eof)?;
     let mut h = source.header_bytes()?;
@@ -717,7 +752,14 @@ pub(super) fn write(
     let differences = std::mem::take(&mut out.differences);
     drop(out);
     let mut pst = UnicodePstFile::open(path)?;
-    pst.lock()?.flush()?;
+    match pst.finalize_with_cancel(&|| cancel.is_cancelled()) {
+        Err(_) if cancel.is_cancelled() => return Ok(None),
+        result => result?,
+    }
+    drop(pst);
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
     partial.keep = true;
     Ok(Some(differences))
 }

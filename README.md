@@ -94,9 +94,9 @@ outcomes, shared by both frontends. Format code stays behind that seam.
 `b6e2ff31592f74458f0481d4671251c92044d8f0`, with only its library sources and a
 PstOff manifest; it is not a copy of the experimental writer spike. Reader
 and writer tasks own its subsequent adaptation. The engine normally depends
-on Microsoft's unmodified `outlook-pst` at
-`cfb721daee538acc50d2bad6faac5ce724f6037d` for allocation maps and independent
-readback. Direct registry versions are exact and all transitive versions are
+on a locally adapted, vendored Microsoft `outlook-pst` library based on
+`cfb721daee538acc50d2bad6faac5ce724f6037d` for bounded allocation-map
+finalization and separate-implementation readback. Direct registry versions are exact and all transitive versions are
 locked. See [dependency notices](THIRD-PARTY.md).
 
 Integration tests in `crates/engine/tests` import only the engine public API

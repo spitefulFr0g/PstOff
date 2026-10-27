@@ -25,11 +25,14 @@ errors = []
 for package in metadata["packages"]:
     if package.get("license") not in APPROVED:
         errors.append(f"Unreviewed license: {package['name']} {package.get('license')}")
-    if package["name"] == "outlook-pst" and package.get("source") != (
-        "git+https://github.com/microsoft/outlook-pst-rs?"
-        "rev=cfb721daee538acc50d2bad6faac5ce724f6037d#cfb721daee538acc50d2bad6faac5ce724f6037d"
+    if package["name"] == "outlook-pst" and (
+        package.get("source") is not None
+        or not package["manifest_path"].replace("\\", "/").endswith("/third-party/outlook-pst/Cargo.toml")
+        or package["version"] != "1.2.0"
+        or package.get("metadata", {}).get("pstoff", {}).get("upstream-revision")
+        != "cfb721daee538acc50d2bad6faac5ce724f6037d"
     ):
-        errors.append("Microsoft independent reader pin changed without audit")
+        errors.append("Microsoft vendored reader/finalizer source changed without audit")
     if package["name"].startswith("gpui-pre") and package["version"] != "0.3.9":
         errors.append(f"GPUI snapshot pin changed without audit: {package['name']} {package['version']}")
 if errors:

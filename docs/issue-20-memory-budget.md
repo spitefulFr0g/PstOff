@@ -11,6 +11,13 @@ on-disk index without a full block map; see [the implementation slice and its
 limits](issue-32-index-progress.md). The inventory below describes the original
 base. The remaining owners and both acceptance contracts are still outstanding.
 
+Output metadata update: writer BBT/NBT records and parent levels now spill to
+private disk spools; the explicitly authorized local Microsoft finalizer
+adaptation also spills AMap records and streams other maps. See
+[implementation, validation and remaining owners](issue-32-output-metadata.md).
+The historical inventory and original finalizer constraint below describe the
+pre-adaptation design baseline. Both acceptance contracts remain unproven.
+
 ## Two distinct acceptance contracts
 
 1. **Payload working memory:** at most 16 MiB of explicitly reserved buffer

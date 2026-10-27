@@ -1,14 +1,14 @@
 use super::*;
 use std::collections::BTreeMap;
 
-fn output(path: &Path) -> Output {
+pub(super) fn output(path: &Path) -> Output<'static> {
     Output {
         cancel: Default::default(),
         file: File::create(path).unwrap(),
         pos: AMAP + 2048,
         next: 1,
-        blocks: vec![],
-        nodes: vec![],
+        blocks: spool::Spool::new().unwrap(),
+        nodes: &[],
         differences: vec![],
         highwater: 1024,
         planned: cache::Plan::new().unwrap(),
@@ -44,9 +44,16 @@ fn emit(path: &Path, table: &mut table::Table) {
     p64(&mut entry, 16, sub);
     finish(out, vec![(0x12e, entry)]);
 }
-fn finish(mut out: Output, entries: Vec<(u64, Vec<u8>)>) {
-    let nbt = out.tree(entries, 0x81, 32).unwrap();
-    let blocks = std::mem::take(&mut out.blocks);
+fn finish(out: Output, entries: Vec<(u64, Vec<u8>)>) {
+    let mut records = spool::Spool::new().unwrap();
+    for (_, entry) in entries {
+        records.append(&entry).unwrap();
+    }
+    finish_records(out, records);
+}
+pub(super) fn finish_records(mut out: Output, records: spool::Spool) {
+    let nbt = out.tree(records, 0x81, 32).unwrap();
+    let blocks = std::mem::replace(&mut out.blocks, spool::Spool::new().unwrap());
     let bbt = out.tree(blocks, 0x80, 24).unwrap();
     let eof = out.pos.div_ceil(512) * 512;
     out.file.set_len(eof).unwrap();
@@ -55,7 +62,16 @@ fn finish(mut out: Output, entries: Vec<(u64, Vec<u8>)>) {
     header[8..10].copy_from_slice(b"SM");
     p16(&mut header, 10, 23);
     p16(&mut header, 12, 19);
+    header[14] = 1;
+    header[15] = 1;
+    p64(&mut header, 32, out.next * 4);
+    p64(&mut header, 516, out.next * 4);
     p64(&mut header, 184, eof);
+    p64(
+        &mut header,
+        192,
+        AMAP + (eof - AMAP - 1) / INTERVAL * INTERVAL,
+    );
     p64(&mut header, 216, nbt.0);
     p64(&mut header, 224, nbt.1);
     p64(&mut header, 232, bbt.0);
