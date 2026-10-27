@@ -44,10 +44,14 @@ GUI launch and screenshot smoke runs stay in #37.
 ## Implementation and validation
 
 Every acceptance criterion is evidenced against the unchanged wrapper at
-`e2d8f57`; see [issue-48-sandbox-acceptance.md](issue-48-sandbox-acceptance.md).
-`python scripts/check --full` passed in Windows Sandbox. The real runs exposed
-no wrapper defect. The only code-adjacent change removes the stale
-`scripts/cargo-sandboxed` entry from `.gitattributes`.
+`e2d8f57`. `python scripts/check --full` passed in Windows Sandbox on the
+`e2d8f57` source tree; later commits change only documentation and remove the
+stale `scripts/cargo-sandboxed` entry from `.gitattributes`. The real runs
+exposed no wrapper defect. Standards and spec reviews found no blocking issue;
+their evidence-wording findings are addressed. No blockers remain.
+
+Follow-up outside this delivery: the guest probe cannot distinguish a
+disabled network from a probe that failed to run.
 
 Next action: open the PR that closes #48, review it and merge.
 
