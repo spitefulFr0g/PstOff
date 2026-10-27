@@ -7,12 +7,16 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-pub(super) struct Spool {
+pub(crate) struct Spool {
     file: Option<File>,
     path: PathBuf,
     pub len: u64,
 }
 impl Spool {
+    #[cfg(test)]
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
     pub fn new() -> Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         loop {
@@ -79,7 +83,7 @@ impl Drop for Spool {
 // Four byte-radix levels; only one eight-byte slot is read at a time. Values
 // are encoded plus one, so zero-filled slots mean absent. Nodes are allocated
 // densely on disk, never with an attacker-controlled sparse-file offset.
-pub(super) struct Index(Spool);
+pub(crate) struct Index(Spool);
 impl Index {
     pub fn visit(
         &mut self,
@@ -156,6 +160,17 @@ impl Index {
             }
         }
         unreachable!()
+    }
+}
+
+impl std::io::Write for Spool {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.append(bytes)
+            .map_err(|_| std::io::Error::other("Report spool write failed"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

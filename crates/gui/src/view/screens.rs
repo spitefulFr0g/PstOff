@@ -946,7 +946,8 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                                         .iter()
                                         .take(SHOWN)
                                         .map(|r| div().text_color(rgb(PEWTER)).child(r.clone())),
-                                ),
+                                )
+                                .children(more(e.reference_count)),
                         )
                         .child(
                             div()
@@ -961,7 +962,7 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                         .gap(px(40.))
                         .child(kv(format::count(r.items), "items converted"))
                         .child(kv(format::count(r.folders), "folders"))
-                        .child(kv(format::count(r.skipped.len() as u64), "skipped items")),
+                        .child(kv(format::count(r.skipped_count as u64), "skipped items")),
                 )
         })
         .when(!r.files.is_empty(), |d| {
@@ -978,7 +979,7 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                             .truncate()
                             .child(f.path.display().to_string()),
                     )
-                    .when(r.files.len() > 1, |d| {
+                    .when(r.file_count > 1, |d| {
                         d.child(
                             div()
                                 .text_color(rgb(PEWTER))
@@ -987,10 +988,11 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                     })
                     .child(div().text_color(rgb(PEWTER)).child(f.size.clone()))
             }))
+            .children(more(r.file_count))
         })
         .when(!r.folder_parts.is_empty(), |d| {
-            d.child(section("Which part each folder went to")).children(
-                r.folder_parts.iter().enumerate().map(|(n, f)| {
+            d.child(section("Which part each folder went to"))
+                .children(r.folder_parts.iter().enumerate().map(|(n, f)| {
                     list_row()
                         .debug_selector(move || format!("folder-part-{index}-{n}"))
                         .child(div().flex_1().truncate().child(f.folder.clone()))
@@ -999,8 +1001,8 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                             f.part,
                             format::plural(f.items, "item", "items")
                         )))
-                }),
-            )
+                }))
+                .children(more(r.folder_part_count))
         })
         .when(complete && !r.skipped.is_empty(), |d| {
             d.child(section("Skipped items"))
@@ -1029,7 +1031,7 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                                 )
                         }),
                 )
-                .children(more(r.skipped.len()))
+                .children(more(r.skipped_count))
         })
         .when(complete, |d| {
             d.child(section("Explained differences"))
@@ -1059,7 +1061,7 @@ fn ost_report(view: &WizardView, index: usize, r: OstReport, cx: &Context<Wizard
                                 ),
                         )
                 }))
-                .children(more(r.differences.len()))
+                .children(more(r.difference_count))
         })
         .when_some(r.saved_report.clone(), |d, path| {
             let folder = path.parent().map(|p| p.to_path_buf());

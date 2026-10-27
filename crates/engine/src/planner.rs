@@ -45,11 +45,15 @@ pub(crate) struct Selection {
     excluded: HashSet<u32>,
 }
 
-fn selected_evidence(evidence: &mut Evidence, excluded: &HashSet<u32>) {
+fn selected_evidence(
+    evidence: &mut Evidence<Records<ItemRef>>,
+    excluded: &HashSet<u32>,
+    cancel: &CancelToken,
+) -> std::io::Result<()> {
     match evidence {
         Evidence::NotChecked => (),
         Evidence::Checked { count, references } => {
-            references.retain(|i| !excluded.contains(&i.folder.0));
+            references.retain_cancellable(|i| !excluded.contains(&i.folder.0), cancel)?;
             *count = references.len() as u64;
         }
         Evidence::Incomplete {
@@ -57,9 +61,9 @@ fn selected_evidence(evidence: &mut Evidence, excluded: &HashSet<u32>) {
             references,
             unchecked,
         } => {
-            references.retain(|i| !excluded.contains(&i.folder.0));
+            references.retain_cancellable(|i| !excluded.contains(&i.folder.0), cancel)?;
             *count = references.len() as u64;
-            unchecked.retain(|i| !excluded.contains(&i.folder.0));
+            unchecked.retain_cancellable(|i| !excluded.contains(&i.folder.0), cancel)?;
             if unchecked.is_empty() {
                 *evidence = Evidence::Checked {
                     count: *count,
@@ -68,19 +72,33 @@ fn selected_evidence(evidence: &mut Evidence, excluded: &HashSet<u32>) {
             }
         }
     }
+    Ok(())
 }
 
 impl Selection {
-    pub fn new(mut recovery: writer::Recovery, excluded: HashSet<u32>) -> Self {
+    pub fn new(
+        mut recovery: writer::Recovery,
+        excluded: HashSet<u32>,
+        cancel: &CancelToken,
+    ) -> std::io::Result<Self> {
         // Recovery, selection and store emission share the resolved source roles.
         let system = HashSet::from(recovery.system.ids());
-        recovery.skipped.retain(|s| match &s.reference {
-            LocalRef::Folder(f) => !excluded.contains(&f.0),
-            LocalRef::Item(i) => !excluded.contains(&i.folder.0),
-        });
-        selected_evidence(&mut recovery.evidence.headers_only, &excluded);
-        selected_evidence(&mut recovery.evidence.unreadable, &excluded);
-        selected_evidence(&mut recovery.evidence.external_references, &excluded);
+        if !excluded.is_empty() {
+            recovery.skipped.retain_cancellable(
+                |s| match &s.reference {
+                    LocalRef::Folder(f) => !excluded.contains(&f.0),
+                    LocalRef::Item(i) => !excluded.contains(&i.folder.0),
+                },
+                cancel,
+            )?;
+            selected_evidence(&mut recovery.evidence.headers_only, &excluded, cancel)?;
+            selected_evidence(&mut recovery.evidence.unreadable, &excluded, cancel)?;
+            selected_evidence(
+                &mut recovery.evidence.external_references,
+                &excluded,
+                cancel,
+            )?;
+        }
         let mut items: Vec<_> = recovery
             .nodes
             .iter()
@@ -88,12 +106,12 @@ impl Selection {
             .cloned()
             .collect();
         items.sort_by_key(|n| n.nid);
-        Self {
+        Ok(Self {
             recovery,
             items,
             system,
             excluded,
-        }
+        })
     }
 
     pub fn part(&self, items: &[Node], split: bool) -> writer::Recovery {
@@ -134,7 +152,7 @@ impl Selection {
             omitted: self.recovery.omitted.clone(),
             // Evidence belongs to the conversion report, never to a candidate
             // Split part. Copying it here multiplies item-count ownership.
-            skipped: Vec::new(),
+            skipped: Records::default(),
             evidence: CompletenessEvidence {
                 headers_only: Evidence::NotChecked,
                 unreadable: Evidence::NotChecked,

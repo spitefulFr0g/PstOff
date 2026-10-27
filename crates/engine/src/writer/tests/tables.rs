@@ -9,7 +9,7 @@ pub(super) fn output(path: &Path) -> Output<'static> {
         next: 1,
         blocks: spool::Spool::new().unwrap(),
         nodes: &[],
-        differences: vec![],
+        differences: crate::Records::default(),
         highwater: 1024,
         planned: cache::Plan::new().unwrap(),
         omitted: Default::default(),
@@ -241,7 +241,7 @@ fn q16_preserves_versions_and_exact_types_through_row_spool() {
             ),
         ]),
     )]);
-    let mut differences = vec![];
+    let mut differences = crate::Records::default();
     table
         .rebuild_contents(
             |item| Ok(planned.get(&item).unwrap().clone()),
@@ -431,7 +431,7 @@ fn planner_streams_large_pcl_occurrences_and_rejects_last_occurrence_conflict() 
         let before = Sha256::digest(std::fs::read(&fixture.source).unwrap());
         let mut source = Pst::from_file(File::open(&fixture.source).unwrap()).unwrap();
         let nodes = source.nodes();
-        let mut differences = vec![];
+        let mut differences = crate::Records::default();
         let (result, peak) = allocations::measure(|| {
             cache::prepare(
                 &mut source,
@@ -488,7 +488,7 @@ fn planner_checks_all_search_occurrences_with_growing_item_counts() {
         planner_source(&fixture.source, items, 32, 1, None);
         let mut source = Pst::from_file(File::open(&fixture.source).unwrap()).unwrap();
         let nodes = source.nodes();
-        let mut differences = vec![];
+        let mut differences = crate::Records::default();
         let (result, peak) = allocations::measure(|| {
             cache::prepare(
                 &mut source,

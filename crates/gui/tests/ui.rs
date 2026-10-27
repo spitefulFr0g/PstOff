@@ -411,7 +411,7 @@ fn report_renders_evidence_split_skips_and_differences(cx: &mut TestAppContext) 
         .lock()
         .unwrap()
         .push_back(Ok(pstoff_engine::Conversion::Complete(Box::new(
-            builder_report(&t, inbox, sent),
+            builder_report(&t, inbox, sent).into_streamed().unwrap(),
         ))));
     click(cx, "step-2");
     choose_destination(cx, t.out());

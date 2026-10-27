@@ -1,6 +1,8 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
 mod planner;
+mod report;
+pub use report::{Records, StreamedReport};
 mod reader;
 mod writer;
 use serde::{Deserialize, Serialize};
@@ -142,49 +144,63 @@ pub struct Skipped {
     pub reference: LocalRef,
     pub reason: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Difference {
     pub property: u32,
     pub item: Option<ItemRef>,
     pub source: String,
     pub reason: String,
 }
+impl std::fmt::Debug for Difference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Difference")
+            .field("property", &self.property)
+            .field("item", &self.item)
+            .finish_non_exhaustive()
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Evidence {
+pub enum Evidence<R = Vec<ItemRef>> {
     NotChecked,
     /// Positive findings remain useful, but damaged Items were not checked.
     Incomplete {
         count: u64,
-        references: Vec<ItemRef>,
-        unchecked: Vec<ItemRef>,
+        references: R,
+        unchecked: R,
     },
     Checked {
         count: u64,
-        references: Vec<ItemRef>,
+        references: R,
     },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompletenessEvidence {
-    pub headers_only: Evidence,
-    pub unreadable: Evidence,
-    pub external_references: Evidence,
+pub struct CompletenessEvidence<R = Vec<ItemRef>> {
+    pub headers_only: Evidence<R>,
+    pub unreadable: Evidence<R>,
+    pub external_references: Evidence<R>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MailboxCompleteness {
     Unknown,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversionReport {
+pub struct ConversionReport<
+    F = Vec<OutputFile>,
+    P = Vec<FolderPart>,
+    S = Vec<Skipped>,
+    D = Vec<Difference>,
+    R = Vec<ItemRef>,
+> {
     pub schema_version: u32,
     pub mailbox_completeness: MailboxCompleteness,
     pub mailbox_completeness_statement: String,
     pub source: PathBuf,
     pub source_sha256: String,
-    pub files: Vec<OutputFile>,
-    pub folders: Vec<FolderPart>,
-    pub skipped: Vec<Skipped>,
-    pub differences: Vec<Difference>,
-    pub evidence: CompletenessEvidence,
+    pub files: F,
+    pub folders: P,
+    pub skipped: S,
+    pub differences: D,
+    pub evidence: CompletenessEvidence<R>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ErrorKind {
@@ -212,7 +228,7 @@ impl std::fmt::Display for EngineError {
 impl std::error::Error for EngineError {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Conversion {
-    Complete(Box<ConversionReport>),
+    Complete(Box<StreamedReport>),
     Cancelled { completed_files: Vec<OutputFile> },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

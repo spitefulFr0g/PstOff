@@ -38,6 +38,11 @@ fn source_payload_relocation_is_selective_ordered_and_cancellable() {
         context::relocation_properties(&mut source, node.bid_data, node.bid_sub, &cancel).unwrap();
     assert!(cells[&0x6801].bytes.is_empty());
     let local = cells[&0x6801].subnode.unwrap();
+    let store_cells =
+        context::store_properties(&mut source, node.bid_data, node.bid_sub, 32, &cancel).unwrap();
+    assert!(store_cells[&0x6801].bytes.is_empty());
+    assert_eq!(store_cells[&0x6801].subnode, Some(local));
+
     let selected = context::selected_properties(
         &mut source,
         node.bid_data,
@@ -56,7 +61,7 @@ fn source_payload_relocation_is_selective_ordered_and_cancellable() {
         next: 1,
         blocks: spool::Spool::new().unwrap(),
         nodes: &[],
-        differences: vec![],
+        differences: crate::Records::default(),
         highwater: 1024,
         planned: cache::Plan::new().unwrap(),
         omitted: Default::default(),
@@ -328,7 +333,9 @@ fn growing_generated_folder_item_counts_keep_selection_identity_and_source_bytes
         }
         assert_eq!(items, count);
         let recovery = recovery::prepare(&mut source, nodes, &Default::default()).unwrap();
-        let selection = crate::planner::Selection::new(recovery, Default::default());
+        let selection =
+            crate::planner::Selection::new(recovery, Default::default(), &Default::default())
+                .unwrap();
         for item in &selection.items {
             let part = selection.part(std::slice::from_ref(item), true);
             let retained: Vec<_> = part.nodes.iter().filter(|n| n.nid_type() == 4).collect();

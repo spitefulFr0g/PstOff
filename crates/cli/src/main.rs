@@ -158,7 +158,14 @@ fn run_convert(path: &Path, options: &ConvertOptions) -> ExitCode {
     };
     match convert(path, options, &mut progress, &cancel) {
         Ok(Conversion::Complete(report)) => {
-            for file in &report.files {
+            for file in report.files.iter() {
+                let file = match file {
+                    Ok(file) => file,
+                    Err(_) => {
+                        eprintln!("Could not read report records.");
+                        return ExitCode::FAILURE;
+                    }
+                };
                 println!("PST: {} ({} bytes)", file.path.display(), file.bytes);
             }
             println!(

@@ -60,7 +60,13 @@ pub(super) fn convert(
             completed_files: vec![],
         });
     }
-    let selection = planner::Selection::new(recovery, excluded);
+    let selection = planner::Selection::new(recovery, excluded, cancel);
+    if cancel.is_cancelled() {
+        return Ok(Conversion::Cancelled {
+            completed_files: vec![],
+        });
+    }
+    let selection = selection.map_err(io_failure)?;
     let split = matches!(options.split, Split::Bytes(_));
     let output_path = |part| {
         options.destination.join(if split {
@@ -104,13 +110,13 @@ pub(super) fn convert(
     let accepted = staging.join("accepted.pst");
     let display = path.file_stem().unwrap_or_default().to_string_lossy();
     let total = selection.items.len() as u64;
-    let mut files = vec![];
-    let mut folders = vec![];
-    let mut differences = vec![];
+    let mut files = Records::default();
+    let mut folders = Records::default();
+    let mut differences = Records::default();
     let mut high_done = 0u64;
     // Only the current candidate and last accepted finalized part occupy staging.
     // Trial emission includes allocation-map regeneration and all final overhead.
-    let result = (|| -> Result<Option<ConversionReport>, EngineError> {
+    let result = (|| -> Result<Option<StreamedReport>, EngineError> {
         let mut start = 0;
         let mut end = if split {
             usize::from(!selection.items.is_empty())
@@ -118,7 +124,7 @@ pub(super) fn convert(
             selection.items.len()
         };
         let mut accepted_end = start;
-        let mut accepted_differences = vec![];
+        let mut accepted_differences = Records::default();
         loop {
             let part = files.len() as u32 + 1;
             let planned = selection.part(&selection.items[start..end], split);
@@ -202,14 +208,20 @@ pub(super) fn convert(
             if !split {
                 cleanup.published.push(output.clone());
             }
-            files.push(OutputFile {
-                path: output,
-                bytes,
-                part,
-            });
+            files
+                .push(OutputFile {
+                    path: output,
+                    bytes,
+                    part,
+                })
+                .map_err(io_failure)?;
             let planned = selection.part(&selection.items[start..accepted_end], split);
-            folders.extend(folder_mapping(&mut source, &planned, part)?);
-            differences.append(&mut accepted_differences);
+            folders
+                .append_cancellable(&folder_mapping(&mut source, &planned, part)?, cancel)
+                .map_err(io_failure)?;
+            differences
+                .append_cancellable(&accepted_differences, cancel)
+                .map_err(io_failure)?;
             if final_part {
                 break;
             }
@@ -228,10 +240,11 @@ pub(super) fn convert(
             differences,
             evidence: selection.recovery.evidence,
         };
-        let json_bytes = serde_json::to_vec_pretty(&report)
-            .map_err(|_| failure(ErrorKind::Io, "Could not serialize the Conversion report."))?;
-        write_synced(&staging.join("report.json"), &json_bytes)?;
-        write_synced(&staging.join("report.txt"), report_text(&report).as_bytes())?;
+        let saved = save_reports(&report, &staging, cancel);
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
+        saved.map_err(io_failure)?;
         for (from, to) in [
             (staging.join("report.json"), json),
             (staging.join("report.txt"), text),
@@ -243,15 +256,26 @@ pub(super) fn convert(
         Ok(Some(report))
     })();
     match result {
+        Err(_) if cancel.is_cancelled() => Ok(Conversion::Cancelled {
+            completed_files: if split {
+                files.collect_records().map_err(io_failure)?
+            } else {
+                vec![]
+            },
+        }),
         Err(mut error) => {
             if !split {
-                files.clear();
+                files = Records::default();
             }
-            error.completed_files = files;
+            error.completed_files = files.collect_records().map_err(io_failure)?;
             Err(error)
         }
         Ok(None) => Ok(Conversion::Cancelled {
-            completed_files: files,
+            completed_files: if split {
+                files.collect_records().map_err(io_failure)?
+            } else {
+                vec![]
+            },
         }),
         Ok(Some(report)) => {
             progress.update(Progress {
@@ -270,8 +294,8 @@ fn folder_mapping(
     source: &mut pstoff_format::ndb::Pst,
     planned: &writer::Recovery,
     part: u32,
-) -> Result<Vec<FolderPart>, EngineError> {
-    let mut folders = vec![];
+) -> Result<Records<FolderPart>, EngineError> {
+    let mut folders = Records::default();
     for folder in planned
         .nodes
         .iter()
@@ -308,12 +332,14 @@ fn folder_mapping(
                 }
             }
         }
-        folders.push(FolderPart {
-            folder: FolderRef(folder.nid),
-            part,
-            items: count,
-            bytes,
-        });
+        folders
+            .push(FolderPart {
+                folder: FolderRef(folder.nid),
+                part,
+                items: count,
+                bytes,
+            })
+            .map_err(io_failure)?;
     }
     Ok(folders)
 }
@@ -365,17 +391,220 @@ impl Drop for Staging {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
-fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), EngineError> {
-    use std::io::Write;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(io_failure)?;
-    file.write_all(bytes).map_err(io_failure)?;
-    file.sync_all().map_err(io_failure)
+struct CancellableWriter<'a, W> {
+    inner: W,
+    cancel: &'a CancelToken,
 }
-fn report_text(report: &ConversionReport) -> String {
+impl<W: std::io::Write> std::io::Write for CancellableWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.cancel.is_cancelled() {
+            return Err(std::io::Error::other("Report writing cancelled"));
+        }
+        self.inner.write(bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+fn save_reports(
+    report: &StreamedReport,
+    staging: &Path,
+    cancel: &CancelToken,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    for (name, json) in [("report.json", true), ("report.txt", false)] {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(staging.join(name))?;
+        let mut writer = CancellableWriter {
+            inner: std::io::BufWriter::with_capacity(8192, file),
+            cancel,
+        };
+        if json {
+            serde_json::to_writer_pretty(&mut writer, report)
+                .map_err(|_| std::io::Error::other("Could not serialize the Conversion report."))?;
+        } else {
+            report_text(report, &mut writer)?;
+        }
+        writer.flush()?;
+        writer.inner.get_ref().sync_all()?;
+    }
+    Ok(())
+}
+fn report_text(report: &StreamedReport, text: &mut impl std::io::Write) -> std::io::Result<()> {
+    write!(
+        text,
+        "{}\nSource: {}\nSHA-256: {}\n",
+        report.mailbox_completeness_statement,
+        report.source.display(),
+        report.source_sha256
+    )?;
+    for file in report.files.iter() {
+        let file = file?;
+        writeln!(
+            text,
+            "File: {} ({} bytes, part {})",
+            file.path.display(),
+            file.bytes,
+            file.part
+        )?;
+    }
+    for folder in report.folders.iter() {
+        let folder = folder?;
+        writeln!(
+            text,
+            "Folder 0x{:x}: {} items, {} bytes, part {}",
+            folder.folder.0, folder.items, folder.bytes, folder.part
+        )?;
+    }
+    for (label, evidence) in [
+        ("Headers-only Items", &report.evidence.headers_only),
+        ("Unreadable content", &report.evidence.unreadable),
+        (
+            "External attachment references",
+            &report.evidence.external_references,
+        ),
+    ] {
+        match evidence {
+            Evidence::NotChecked => {
+                writeln!(text, "{label}: Not checked")?;
+            }
+            Evidence::Checked { count, references }
+            | Evidence::Incomplete {
+                count, references, ..
+            } => {
+                writeln!(text, "{label}: {count}")?;
+                if let Evidence::Incomplete { unchecked, .. } = evidence {
+                    writeln!(
+                        text,
+                        "  Not checked for {} Items; findings above are a lower bound.",
+                        unchecked.len()
+                    )?;
+                    for item in unchecked.iter() {
+                        let item = item?;
+                        writeln!(
+                            text,
+                            "  Not checked: {}",
+                            local_reference(&LocalRef::Item(item.clone()))
+                        )?;
+                    }
+                }
+                for item in references.iter() {
+                    let item = item?;
+                    writeln!(text, "  {}", local_reference(&LocalRef::Item(item.clone())))?;
+                }
+            }
+        }
+    }
+    writeln!(text, "External references describe stored references, not missing content. Targets are not contacted or checked.\nSkipped: {}", report.skipped.len())?;
+    for skipped in report.skipped.iter() {
+        let skipped = skipped?;
+        writeln!(
+            text,
+            "  {}: {}",
+            local_reference(&skipped.reference),
+            skipped.reason
+        )?;
+    }
+    writeln!(
+        text,
+        "Recorded property differences: {}",
+        report.differences.len()
+    )?;
+    for difference in report.differences.iter() {
+        let difference = difference?;
+        let reference = difference.item.as_ref().map_or_else(
+            || "Store".into(),
+            |item| local_reference(&LocalRef::Item(item.clone())),
+        );
+        writeln!(
+            text,
+            "  Property 0x{:08x}, {}\n    Source: {}\n    Reason: {}",
+            difference.property, reference, difference.source, difference.reason
+        )?;
+    }
+    Ok(())
+}
+
+fn local_reference(reference: &LocalRef) -> String {
+    match reference {
+        LocalRef::Folder(folder) => format!("Folder 0x{:x}", folder.0),
+        LocalRef::Item(item) => format!("Folder 0x{:x}, Item 0x{:x}", item.folder.0, item.node),
+    }
+}
+
+// Never delete a directory that could belong to a concurrent or crashed run.
+// Flag all reserved staging names, including a different output base name.
+fn flag_staging(destination: &Path) -> Result<(), EngineError> {
+    for entry in fs::read_dir(destination).map_err(io_failure)? {
+        let entry = entry.map_err(io_failure)?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') && name.ends_with(".pstoff-partial") {
+            return Err(failure(ErrorKind::Collision, format!(
+                "Possible stale or active PstOff staging path: {}. Review it before retrying; it has been left untouched.", entry.path().display())));
+        }
+    }
+    Ok(())
+}
+fn preflight_space(
+    source: &Path,
+    destination: &Path,
+    folders: &Records<FolderPart>,
+    reserve: u64,
+) -> Result<(), EngineError> {
+    // Source bytes account for properties/attachments not represented by message
+    // sizes. Doubling plus 64 MiB reserves room for format expansion and reports.
+    // This is a conservative estimate, not a guarantee against later disk changes.
+    let declared = folders
+        .iter()
+        .try_fold(0u64, |sum, f| f.map(|f| sum.saturating_add(f.bytes)))
+        .map_err(io_failure)?;
+    let required = fs::metadata(source)
+        .map_err(io_failure)?
+        .len()
+        .max(declared)
+        .saturating_mul(2)
+        .saturating_add(reserve);
+    let available = available_space(destination).map_err(io_failure)?;
+    if available < required {
+        return Err(failure(ErrorKind::InsufficientSpace, format!(
+            "Not enough destination space: {required} bytes estimated, {available} bytes available.")));
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn available_space(path: &Path) -> std::io::Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let path = fs::canonicalize(path)?;
+    let wide: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0;
+    // NUL terminated directory path and valid output pointer; other outputs unused.
+    if unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(available)
+    }
+}
+#[cfg(not(windows))]
+fn available_space(_: &Path) -> std::io::Result<u64> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Conversion requires Windows disk preflight.",
+    ))
+}
+
+#[cfg(test)]
+fn materialized_text_reference(report: &ConversionReport) -> String {
     use std::fmt::Write;
     let mut text = format!(
         "{}\nSource: {}\nSHA-256: {}\n",
@@ -464,77 +693,192 @@ fn report_text(report: &ConversionReport) -> String {
     text
 }
 
-fn local_reference(reference: &LocalRef) -> String {
-    match reference {
-        LocalRef::Folder(folder) => format!("Folder 0x{:x}", folder.0),
-        LocalRef::Item(item) => format!("Folder 0x{:x}, Item 0x{:x}", item.folder.0, item.node),
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    #[test]
+    fn high_record_count_json_and_text_match_materialized_schema() {
+        let mut report = ConversionReport {
+            schema_version: REPORT_SCHEMA_VERSION,
+            mailbox_completeness: MailboxCompleteness::Unknown,
+            mailbox_completeness_statement: MAILBOX_COMPLETENESS_STATEMENT.into(),
+            source: PathBuf::from("generated.ost"),
+            source_sha256: "00".repeat(32),
+            files: vec![],
+            folders: vec![],
+            skipped: vec![],
+            differences: vec![],
+            evidence: CompletenessEvidence {
+                headers_only: Evidence::NotChecked,
+                unreadable: Evidence::NotChecked,
+                external_references: Evidence::NotChecked,
+            },
+        }
+        .into_streamed()
+        .unwrap();
+        let mut references = Records::default();
+        for n in 0..25_000 {
+            let item = ItemRef {
+                folder: FolderRef(2),
+                node: n * 32 + 4,
+            };
+            references.push(item.clone()).unwrap();
+            report
+                .skipped
+                .push(Skipped {
+                    code: SkipReason::UnreadableItem,
+                    reference: LocalRef::Item(item.clone()),
+                    reason: "Synthetic unreadable context".into(),
+                })
+                .unwrap();
+            report
+                .differences
+                .push(Difference {
+                    property: 0x30080040,
+                    item: Some(item),
+                    source: "Synthetic contents table".into(),
+                    reason: "Generated regression diagnostic. ".repeat(32),
+                })
+                .unwrap();
+            report
+                .folders
+                .push(FolderPart {
+                    folder: FolderRef(2 + (n % 64) * 32),
+                    part: 1,
+                    items: 1,
+                    bytes: 1024,
+                })
+                .unwrap();
+        }
+        report.evidence.headers_only = Evidence::Incomplete {
+            count: 25_000,
+            references: references.clone(),
+            unchecked: references,
+        };
+        assert_eq!(report.summary_counts().unwrap(), (25_000, 64));
+        // Materialization is deliberately confined to compatibility assertions.
+        let collected = report.collect_report().unwrap();
+        let mut json = Vec::new();
+        serde_json::to_writer_pretty(&mut json, &report).unwrap();
+        assert!(
+            json == serde_json::to_vec_pretty(&collected).unwrap(),
+            "Streamed JSON differs from schema-2 serialization"
+        );
+        let mut text = Vec::new();
+        report_text(&report, &mut text).unwrap();
+        assert!(
+            text == materialized_text_reference(&collected).into_bytes(),
+            "Streamed text differs from the legacy formatter"
+        );
+        let decoded: StreamedReport = serde_json::from_slice(&json).unwrap();
+        assert_eq!(decoded.differences.len(), 25_000);
+        assert_eq!(decoded.summary_counts().unwrap(), (25_000, 64));
+    }
+    #[test]
+    fn report_writes_honor_cancellation_and_io_errors() {
+        struct CancelAfterWrite {
+            token: CancelToken,
+            written: usize,
+            threshold: usize,
+        }
+        impl std::io::Write for CancelAfterWrite {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.written += b.len();
+                if self.written >= self.threshold {
+                    self.token.cancel();
+                }
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut records = Records::default();
+        records
+            .extend((0..25_000).map(|node| ItemRef {
+                folder: FolderRef(2),
+                node,
+            }))
+            .unwrap();
+        struct Count(usize);
+        impl std::io::Write for Count {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0 += b.len();
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut count = Count(0);
+        serde_json::to_writer(&mut count, &records).unwrap();
+        for threshold in [0, count.0 / 2, count.0 - 2] {
+            let token = CancelToken::default();
+            let mut writer = CancellableWriter {
+                inner: CancelAfterWrite {
+                    token: token.clone(),
+                    written: 0,
+                    threshold,
+                },
+                cancel: &token,
+            };
+            assert!(serde_json::to_writer(&mut writer, &records).is_err());
+            assert!(token.is_cancelled());
+        }
+        struct Failing;
+        impl std::io::Write for Failing {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("Synthetic disk full"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(serde_json::to_writer(Failing, &records).is_err());
     }
 }
 
-// Never delete a directory that could belong to a concurrent or crashed run.
-// Flag all reserved staging names, including a different output base name.
-fn flag_staging(destination: &Path) -> Result<(), EngineError> {
-    for entry in fs::read_dir(destination).map_err(io_failure)? {
-        let entry = entry.map_err(io_failure)?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') && name.ends_with(".pstoff-partial") {
-            return Err(failure(ErrorKind::Collision, format!(
-                "Possible stale or active PstOff staging path: {}. Review it before retrying; it has been left untouched.", entry.path().display())));
+#[cfg(test)]
+mod report_cleanup_tests {
+    use super::*;
+    #[test]
+    fn cancelled_report_staging_and_unsplit_output_are_removed() {
+        let root =
+            std::env::temp_dir().join(format!("pstoff-report-cleanup-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let staging = root.join("partial");
+        fs::create_dir(&staging).unwrap();
+        let output = root.join("output.pst");
+        fs::write(&output, b"synthetic").unwrap();
+        let report = ConversionReport {
+            schema_version: REPORT_SCHEMA_VERSION,
+            mailbox_completeness: MailboxCompleteness::Unknown,
+            mailbox_completeness_statement: MAILBOX_COMPLETENESS_STATEMENT.into(),
+            source: PathBuf::from("generated.ost"),
+            source_sha256: String::new(),
+            files: vec![],
+            folders: vec![],
+            skipped: vec![],
+            differences: vec![],
+            evidence: CompletenessEvidence {
+                headers_only: Evidence::NotChecked,
+                unreadable: Evidence::NotChecked,
+                external_references: Evidence::NotChecked,
+            },
         }
+        .into_streamed()
+        .unwrap();
+        let token = CancelToken::default();
+        token.cancel();
+        {
+            let _cleanup = Staging {
+                path: staging.clone(),
+                published: vec![output.clone()],
+            };
+            assert!(save_reports(&report, &staging, &token).is_err());
+        }
+        assert!(!staging.exists());
+        assert!(!output.exists());
+        fs::remove_dir(&root).unwrap();
     }
-    Ok(())
-}
-fn preflight_space(
-    source: &Path,
-    destination: &Path,
-    folders: &[FolderPart],
-    reserve: u64,
-) -> Result<(), EngineError> {
-    // Source bytes account for properties/attachments not represented by message
-    // sizes. Doubling plus 64 MiB reserves room for format expansion and reports.
-    // This is a conservative estimate, not a guarantee against later disk changes.
-    let declared = folders
-        .iter()
-        .fold(0u64, |sum, f| sum.saturating_add(f.bytes));
-    let required = fs::metadata(source)
-        .map_err(io_failure)?
-        .len()
-        .max(declared)
-        .saturating_mul(2)
-        .saturating_add(reserve);
-    let available = available_space(destination).map_err(io_failure)?;
-    if available < required {
-        return Err(failure(ErrorKind::InsufficientSpace, format!(
-            "Not enough destination space: {required} bytes estimated, {available} bytes available.")));
-    }
-    Ok(())
-}
-#[cfg(windows)]
-fn available_space(path: &Path) -> std::io::Result<u64> {
-    use std::os::windows::ffi::OsStrExt;
-    let path = fs::canonicalize(path)?;
-    let wide: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut available = 0;
-    // NUL terminated directory path and valid output pointer; other outputs unused.
-    if unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    } == 0
-    {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(available)
-    }
-}
-#[cfg(not(windows))]
-fn available_space(_: &Path) -> std::io::Result<u64> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "Conversion requires Windows disk preflight.",
-    ))
 }

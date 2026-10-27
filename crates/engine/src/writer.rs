@@ -5,7 +5,7 @@ pub(super) use recovery::prepare as recover;
 pub(crate) use recovery::Recovery;
 mod context;
 pub(crate) use context::evidence_properties;
-mod spool;
+pub(crate) mod spool;
 mod store;
 mod system;
 mod table;
@@ -58,7 +58,7 @@ struct Output<'a> {
     next: u64,
     blocks: spool::Spool,
     nodes: &'a [Node],
-    differences: Vec<crate::Difference>,
+    differences: crate::Records<crate::Difference>,
     highwater: u32,
     planned: cache::Plan,
     omitted: std::collections::HashSet<u32>,
@@ -269,7 +269,7 @@ impl Output<'_> {
         bid: u64,
         sub: u64,
         depth: u32,
-        override_cells: Option<&context::Properties>,
+        override_cells: Option<context::Properties>,
         nid: u32,
     ) -> Result<(u64, u64)> {
         if depth > 32 {
@@ -287,7 +287,7 @@ impl Output<'_> {
             drop(first);
             let cells = if is_pc {
                 Some(match override_cells {
-                    Some(c) => c.clone(),
+                    Some(c) => c,
                     None => context::relocation_properties(source, bid, sub, &self.cancel)?,
                 })
             } else {
@@ -353,7 +353,7 @@ impl Output<'_> {
                                         item: None,
                                         source: format!("Hierarchy table 0x{nid:x}, Folder 0x{folder:x}"),
                                         reason: "Folder cache reflects Items and children selected for this part.".into(),
-                                    });
+                                    })?;
                                 }
                             }
                         }
@@ -514,7 +514,7 @@ pub(super) fn write(
     display: &str,
     progress: &mut dyn crate::ProgressSink,
     cancel: &crate::CancelToken,
-) -> Result<Option<Vec<crate::Difference>>> {
+) -> Result<Option<crate::Records<crate::Difference>>> {
     let nodes = &recovery.nodes;
     let omitted = &recovery.omitted;
     let total = nodes
@@ -532,7 +532,20 @@ pub(super) fn write(
     if cancel.is_cancelled() {
         return Ok(None);
     }
-    let (store_cells, mut differences) = store::prepare(source, nodes, display, &recovery.system)?;
+    let prepared = store::prepare(source, nodes, display, &recovery.system, cancel);
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
+    let (cells, mut differences) = prepared?;
+    // Keep property descriptors on disk across planning/emission, preserving
+    // diagnostic order without retaining a store-wide property map.
+    let mut store_cells = crate::Records::default();
+    for cell in cells {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
+        store_cells.push(cell)?;
+    }
     let Some(planned) =
         cache::prepare(source, nodes, &mut differences, cancel, omitted).map_err(|error| {
             crate::EngineError {
@@ -592,7 +605,7 @@ pub(super) fn write(
                         .count() as u32;
                     let bytes = count.to_le_bytes().to_vec();
                     if cell.bytes != bytes {
-                        out.differences.push(crate::Difference { property: (id as u32) << 16 | cell.kind as u32, item: None, source: format!("Folder 0x{:x}", node.nid), reason: "Folder count reflects Items selected for this part after exclusions and reported skips.".into() });
+                        out.differences.push(crate::Difference { property: (id as u32) << 16 | cell.kind as u32, item: None, source: format!("Folder 0x{:x}", node.nid), reason: "Folder count reflects Items selected for this part after exclusions and reported skips.".into() })?;
                         cell.bytes = bytes;
                     }
                 }
@@ -613,12 +626,20 @@ pub(super) fn write(
                         item: None,
                         source: format!("Folder 0x{:x}", node.nid),
                         reason: "Folder child flag reflects folders selected for this part.".into(),
-                    });
+                    })?;
                 }
             }
             Some(cells)
         } else if node.nid == 0x21 {
-            Some(store_cells.clone())
+            let mut cells = context::Properties::new();
+            for cell in store_cells.iter() {
+                if cancel.is_cancelled() {
+                    return Ok(None);
+                }
+                let (id, cell) = cell?;
+                cells.insert(id, cell);
+            }
+            Some(cells)
         } else if matches!(node.nid_type(), 4 | 8) {
             let mut cells =
                 context::relocation_properties(source, node.bid_data, node.bid_sub, cancel)?;
@@ -651,7 +672,7 @@ pub(super) fn write(
             } else {
                 out.differences.push(crate::Difference { property: 0x3001001f, item: None,
                     source: format!("Output system folder 0x{:x}", node.nid),
-                    reason: "Created empty required PST scaffolding; no source mail recovered into this folder.".into() });
+                    reason: "Created empty required PST scaffolding; no source mail recovered into this folder.".into() })?;
                 context::pc(override_cells.as_ref().unwrap(), &mut heap, |_| {
                     Err("Unexpected generated folder payload".into())
                 })?
@@ -666,7 +687,7 @@ pub(super) fn write(
                 node.bid_data,
                 node.bid_sub,
                 0,
-                override_cells.as_ref(),
+                override_cells,
                 node.nid,
             )?
         };

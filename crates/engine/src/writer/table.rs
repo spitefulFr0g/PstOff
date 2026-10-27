@@ -418,7 +418,7 @@ impl Table {
         mut properties: impl FnMut(u32) -> Result<Properties>,
         nodes: &[Node],
         nid: u32,
-        differences: &mut Vec<Difference>,
+        differences: &mut crate::Records<Difference>,
     ) -> Result<()> {
         self.rows.rewrite(|(row, _, cells)| {
             let node = nodes
@@ -459,7 +459,7 @@ impl Table {
                     }),
                     source: format!("Contents table 0x{nid:x}, same Item property context"),
                     reason: reason.into(),
-                });
+                })?;
             }
             Ok(true)
         })?;

@@ -490,9 +490,9 @@ fn report_rows_cover_split_mapping_skipped_items_evidence_and_differences() {
         .results
         .lock()
         .unwrap()
-        .push_back(Ok(Conversion::Complete(Box::new(builder_report(
-            &t, inbox, sent,
-        )))));
+        .push_back(Ok(Conversion::Complete(Box::new(
+            builder_report(&t, inbox, sent).into_streamed().unwrap(),
+        ))));
     to_convert(&mut w, t.out());
     w.start().unwrap().execute(engine.as_ref());
     w.poll();
@@ -518,6 +518,7 @@ fn report_rows_cover_split_mapping_skipped_items_evidence_and_differences() {
     assert_eq!(r.differences[0].item, "Store");
     assert!(r.differences[1].item.starts_with("Item 0x200044 in "));
     assert_eq!(r.differences[1].source, "contents table cache");
+    assert!(!format!("{:?}", r.differences[1]).contains("contents table cache"));
 }
 
 #[test]
@@ -632,7 +633,9 @@ fn incomplete_evidence_retains_findings_and_names_unchecked_items() {
         .results
         .lock()
         .unwrap()
-        .push_back(Ok(Conversion::Complete(Box::new(report))));
+        .push_back(Ok(Conversion::Complete(Box::new(
+            report.into_streamed().unwrap(),
+        ))));
     to_convert(&mut w, t.out());
     w.start().unwrap().execute(engine.as_ref());
     w.poll();
@@ -641,4 +644,82 @@ fn incomplete_evidence_retains_findings_and_names_unchecked_items() {
     assert_eq!(evidence.value, "1 found; 1 not checked");
     assert!(evidence.references[0].contains("0x200024"));
     assert!(evidence.references[1].starts_with("Not checked: Item 0x200044"));
+}
+
+#[test]
+fn report_preview_is_bounded_and_keeps_exact_counts() {
+    let t = Temp::new();
+    let engine = Arc::new(ScriptedEngine::default());
+    let mut w = Wizard::new(engine.clone());
+    let id = add(&mut w, vec![t.write("m.ost", &mailbox())])[0];
+    let tree = w.source(id).unwrap().folders();
+    let inbox = folder_named(tree, "Inbox").0;
+    let sent = folder_named(tree, "Sent Items").0;
+    let mut saved = builder_report(&t, inbox, sent);
+    saved.files = saved
+        .files
+        .iter()
+        .cloned()
+        .cycle()
+        .take(saved.files.len() * 1000)
+        .collect();
+    saved.folders = saved
+        .folders
+        .iter()
+        .cloned()
+        .cycle()
+        .take(saved.folders.len() * 1000)
+        .collect();
+    saved.skipped = saved
+        .skipped
+        .iter()
+        .cloned()
+        .cycle()
+        .take(saved.skipped.len() * 1000)
+        .collect();
+    saved.differences = saved
+        .differences
+        .iter()
+        .cloned()
+        .cycle()
+        .take(saved.differences.len() * 1000)
+        .collect();
+    saved.evidence.headers_only = Evidence::Incomplete {
+        count: 2000,
+        references: vec![item(inbox, 0x200024); 2000],
+        unchecked: vec![item(sent, 0x200044); 1000],
+    };
+    engine
+        .results
+        .lock()
+        .unwrap()
+        .push_back(Ok(Conversion::Complete(Box::new(
+            saved.into_streamed().unwrap(),
+        ))));
+    to_convert(&mut w, t.out());
+    w.start().unwrap().execute(engine.as_ref());
+    w.poll();
+    let reports = report::build(&w);
+    let r = &reports[0];
+    assert_eq!((r.items, r.folders), (4000, 2));
+    assert_eq!(
+        (
+            r.file_count,
+            r.folder_part_count,
+            r.skipped_count,
+            r.difference_count
+        ),
+        (2000, 3000, 2000, 2000)
+    );
+    for length in [
+        r.files.len(),
+        r.folder_parts.len(),
+        r.skipped.len(),
+        r.differences.len(),
+        r.evidence[0].references.len(),
+    ] {
+        assert_eq!(length, report::SHOWN);
+    }
+    assert_eq!(r.evidence[0].reference_count, 3000);
+    assert_eq!(r.evidence[0].value, "2000 found; 1000 not checked");
 }

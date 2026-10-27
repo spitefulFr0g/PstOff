@@ -350,7 +350,7 @@ fn own_policy(
 pub(super) fn prepare(
     source: &mut Pst,
     nodes: &[Node],
-    differences: &mut Vec<Difference>,
+    differences: &mut crate::Records<Difference>,
     cancel: &crate::CancelToken,
     omitted: &std::collections::HashSet<u32>,
 ) -> Result<Option<Plan>> {
@@ -363,7 +363,7 @@ pub(super) fn prepare(
 fn prepare_inner(
     source: &mut Pst,
     nodes: &[Node],
-    differences: &mut Vec<Difference>,
+    differences: &mut crate::Records<Difference>,
     cancel: &crate::CancelToken,
     omitted: &std::collections::HashSet<u32>,
 ) -> Result<Plan> {
@@ -539,7 +539,7 @@ fn prepare_inner(
                             "Q15: validated agreeing XID/PCL pair; no server-lineage claim."
                         }
                         .into(),
-                    });
+                    })?;
                 }
             }
         }

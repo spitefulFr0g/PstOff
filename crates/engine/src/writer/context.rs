@@ -4,7 +4,7 @@ use super::{p16, p32, Result, MAX};
 use pstoff_format::ndb::Pst;
 use std::collections::BTreeMap;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Cell {
     pub kind: u16,
     // Relocation/selective reads may omit bytes when subnode is Some. Only
@@ -37,6 +37,35 @@ pub(super) fn relocation_properties(
     cancel: &crate::CancelToken,
 ) -> Result<Properties> {
     read_properties(source, bid, sub, |_, _| false, Some(cancel))
+}
+// Store policy needs only bounded comparison operands. All unrelated subnode
+// payloads remain namespace-local references, including arbitrary custom values.
+pub(super) fn store_properties(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    display_bytes: usize,
+    cancel: &crate::CancelToken,
+) -> Result<Properties> {
+    let mut cells = Properties::new();
+    visit_properties(
+        source,
+        bid,
+        sub,
+        |id, _| match id {
+            0x0ff9 => 17,
+            0x3001 => display_bytes.saturating_add(1),
+            0x67ff | 0x35df => 5,
+            0x35e0 | 0x35e3 | 0x35e7 => 25,
+            _ => 0,
+        },
+        Some(cancel),
+        |id, cell| {
+            cells.insert(id, cell);
+            Ok(())
+        },
+    )?;
+    Ok(cells)
 }
 pub(super) fn selected_properties(
     source: &mut Pst,

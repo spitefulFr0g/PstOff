@@ -12,8 +12,8 @@ pub(crate) struct Recovery {
     pub system: system::SystemFolders,
     pub created: BTreeMap<u32, String>,
     pub omitted: HashSet<u32>,
-    pub skipped: Vec<Skipped>,
-    pub evidence: CompletenessEvidence,
+    pub skipped: Records<Skipped>,
+    pub evidence: CompletenessEvidence<Records<ItemRef>>,
 }
 
 // Use the same strict property/table readers as emission, including attachment,
@@ -75,7 +75,10 @@ fn reference(n: &Node) -> ItemRef {
         node: n.nid,
     }
 }
-fn evidence(references: Vec<ItemRef>, unchecked: &[ItemRef]) -> Evidence {
+fn evidence(
+    references: Records<ItemRef>,
+    unchecked: &Records<ItemRef>,
+) -> Evidence<Records<ItemRef>> {
     let count = references.len() as u64;
     if unchecked.is_empty() {
         Evidence::Checked { count, references }
@@ -83,7 +86,7 @@ fn evidence(references: Vec<ItemRef>, unchecked: &[ItemRef]) -> Evidence {
         Evidence::Incomplete {
             count,
             references,
-            unchecked: unchecked.to_vec(),
+            unchecked: unchecked.clone(),
         }
     }
 }
@@ -112,7 +115,7 @@ pub(crate) fn prepare(
         .collect();
     let mut omitted = HashSet::new();
     let mut bad_folders = HashSet::new();
-    let mut skipped = vec![];
+    let mut skipped = Records::default();
     for folder in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
         if cancel.is_cancelled() {
             break;
@@ -166,18 +169,18 @@ pub(crate) fn prepare(
                     SkipReason::UnreadableAncestor
                 },
                 reason: "Folder or ancestor context could not be read; subtree skipped.".into(),
-            });
+            })?;
         }
         if matches!(n.nid_type(), 0xd..=0xf) && lost.iter().any(|id| id & !31 == n.nid & !31) {
             omitted.insert(n.nid);
         }
     }
-    let mut headers = vec![];
-    let mut external = vec![];
-    let mut unreadable = vec![];
-    let mut unchecked = vec![];
-    let mut header_unchecked = vec![];
-    let mut external_unchecked = vec![];
+    let mut headers = Records::default();
+    let mut external = Records::default();
+    let mut unreadable = Records::default();
+    let mut unchecked = Records::default();
+    let mut header_unchecked = Records::default();
+    let mut external_unchecked = Records::default();
     for n in nodes.iter().filter(|n| matches!(n.nid_type(), 4 | 8)) {
         if cancel.is_cancelled() {
             break;
@@ -196,8 +199,8 @@ pub(crate) fn prepare(
             ))?
         {
             omitted.insert(n.nid);
-            unreadable.push(item.clone());
-            unchecked.push(item.clone());
+            unreadable.push(item.clone())?;
+            unchecked.push(item.clone())?;
             skipped.push(Skipped {
                 reference: LocalRef::Item(item),
                 code: if ancestor {
@@ -211,7 +214,7 @@ pub(crate) fn prepare(
                     "Item properties or nested content could not be read."
                 }
                 .into(),
-            });
+            })?;
             continue;
         }
         let pc = context::evidence_properties(source, n.bid_data, n.bid_sub, &header_ids, cancel)?;
@@ -227,10 +230,10 @@ pub(crate) fn prepare(
             }
         }
         if positive {
-            headers.push(item.clone());
+            headers.push(item.clone())?;
         }
         if header_unknown {
-            header_unchecked.push(item.clone());
+            header_unchecked.push(item.clone())?;
         }
         // Walk nested Items as well. A reference is evidence of a reference,
         // never proof of missing content or of reachability (conversion is offline).
@@ -270,14 +273,14 @@ pub(crate) fn prepare(
             }
         }
         if has_external {
-            external.push(item.clone());
+            external.push(item.clone())?;
         }
         if unknown_external {
-            external_unchecked.push(item);
+            external_unchecked.push(item)?;
         }
     }
-    header_unchecked.extend(unchecked.iter().cloned());
-    external_unchecked.extend(unchecked);
+    header_unchecked.append_cancellable(&unchecked, cancel)?;
+    external_unchecked.append_cancellable(&unchecked, cancel)?;
     let highwater = nodes.iter().map(|n| n.nid & !31).max().unwrap_or(0x120);
     nodes.retain(|n| !omitted.contains(&n.nid));
     let (system, created) = system::repair(identity, &mut nodes, highwater)?;
@@ -289,7 +292,7 @@ pub(crate) fn prepare(
         skipped,
         evidence: CompletenessEvidence {
             headers_only: evidence(headers, &header_unchecked),
-            unreadable: evidence(unreadable, &[]),
+            unreadable: evidence(unreadable, &Records::default()),
             external_references: evidence(external, &external_unchecked),
         },
     })

@@ -153,6 +153,7 @@ fn source_folder_identity_overrides_english_decoys_in_split_and_exclusions() {
         else {
             panic!("cancelled")
         };
+        let report = Box::new(report.collect_report().unwrap());
         let output = outlook_pst::open_store(&report.files[0].path).unwrap();
         assert_eq!(
             report.folders.len(),
@@ -385,6 +386,7 @@ fn converts_synthetic_ost_to_readable_pst_without_modifying_source() {
     else {
         panic!("cancelled")
     };
+    let report = Box::new(report.collect_report().unwrap());
     let store = outlook_pst::open_store(&report.files[0].path).unwrap();
     assert_eq!(store.properties().display_name().unwrap(), "synthetic");
     assert_eq!(report.folders.len(), 5);
@@ -613,6 +615,7 @@ fn all_item_classes_and_short_non_final_streams_round_trip_with_valid_totals() {
     else {
         panic!("cancelled")
     };
+    let report = Box::new(report.collect_report().unwrap());
     let mut output = Pst::open(report.files[0].path.to_str().unwrap()).unwrap();
     let store = outlook_pst::open_store(&report.files[0].path).unwrap();
     let mut actual = vec![];
@@ -673,6 +676,7 @@ fn complete(bytes: &[u8], base: &str) -> (support::Fixture, pstoff_engine::Conve
     else {
         panic!("cancelled")
     };
+    let report = Box::new(report.collect_report().unwrap());
     assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
     (f, *report)
 }
@@ -982,7 +986,7 @@ fn split_report(
     let Conversion::Complete(report) = result.unwrap() else {
         panic!("cancelled")
     };
-    report
+    Box::new(report.collect_report().unwrap())
 }
 
 #[test]
@@ -1189,6 +1193,7 @@ fn exclusions_cascade_and_update_progress_evidence_and_folder_mapping() {
         .unwrap() else {
             panic!("cancelled")
         };
+        let report = Box::new(report.collect_report().unwrap());
         assert!(events.iter().all(|p| p.total == 1));
         assert_eq!(report.folders.iter().map(|f| f.items).sum::<u64>(), 1);
         assert_eq!(report.folders.iter().map(|f| f.bytes).sum::<u64>(), 100);
@@ -1802,4 +1807,24 @@ fn microsoft_reader_verifies_recipients_attachment_bytes_and_associated_item_pro
         };
         assert_eq!(address.to_string(), "nested@example.invalid");
     }
+}
+
+#[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
+fn arbitrary_store_payload_survives_bounded_store_preparation() {
+    let payload: Vec<_> = (0..180_013).map(|i| (i * 37 % 251) as u8).collect();
+    let bytes = source_store(vec![Item::new("IPM.Note", 1234)]).build_with_store_properties(&[
+        folder_entry(0x35e0, 0x182),
+        folder_entry(0x35e3, 0x1c2),
+        folder_entry(0x35e7, 0x162),
+        synthetic::Property::binary(0x6801, payload.clone()),
+    ]);
+    let (_fixture, report) = complete(&bytes, "store-payload");
+    let output = outlook_pst::open_store(&report.files[0].path).unwrap();
+    let Some(outlook_pst::ltp::prop_context::PropertyValue::Binary(value)) =
+        output.properties().get(0x6801)
+    else {
+        panic!("missing synthetic store payload")
+    };
+    assert!(value.buffer() == payload, "Synthetic store payload differs");
 }

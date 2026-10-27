@@ -5,8 +5,8 @@ use crate::run::{JobState, Outcome};
 use crate::selection::folder_path;
 use crate::wizard::Wizard;
 use pstoff_engine::{
-    BatchResult, Conversion, ConversionReport, ErrorKind, Evidence, Folder, ItemRef, LocalRef,
-    OutputFile, MAILBOX_COMPLETENESS_STATEMENT,
+    BatchResult, Conversion, ErrorKind, Evidence, Folder, ItemRef, LocalRef, OutputFile,
+    StreamedReport, MAILBOX_COMPLETENESS_STATEMENT,
 };
 use std::path::PathBuf;
 
@@ -19,6 +19,7 @@ pub struct EvidenceRow {
     pub value: String,
     pub note: &'static str,
     pub references: Vec<String>,
+    pub reference_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,12 +36,20 @@ pub struct FolderPartRow {
     pub items: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DifferenceRow {
     pub property: String,
     pub item: String,
     pub source: String,
     pub reason: String,
+}
+
+impl std::fmt::Debug for DifferenceRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DifferenceRow")
+            .field("property", &self.property)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,10 +62,14 @@ pub struct OstReport {
     pub items: u64,
     pub folders: u64,
     pub files: Vec<FileRow>,
+    pub file_count: usize,
+    pub folder_part_count: usize,
     /// Shown when the Items went into more than one part.
     pub folder_parts: Vec<FolderPartRow>,
     pub skipped: Vec<(String, String)>,
     pub differences: Vec<DifferenceRow>,
+    pub skipped_count: usize,
+    pub difference_count: usize,
     pub saved_report: Option<PathBuf>,
 }
 
@@ -97,9 +110,13 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
                 items: 0,
                 folders: 0,
                 files: Vec::new(),
+                file_count: 0,
+                folder_part_count: 0,
                 folder_parts: Vec::new(),
                 skipped: Vec::new(),
                 differences: Vec::new(),
+                skipped_count: 0,
+                difference_count: 0,
                 saved_report: None,
             };
             match &job.state {
@@ -107,7 +124,9 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
                     conversion: Conversion::Complete(report),
                     ..
                 }) => {
-                    fill_complete(&mut out, report, tree);
+                    if fill_complete(&mut out, report, tree).is_err() {
+                        out.message = Some("Could not read report records; see the saved report.".into());
+                    }
                     let saved = job
                         .options
                         .destination
@@ -123,6 +142,7 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
                             .into(),
                     );
                     out.files = file_rows(completed_files);
+                    out.file_count = completed_files.len();
                 }
                 JobState::Done(BatchResult::Failed { error, .. }) => {
                     let hint = match &error.kind {
@@ -140,6 +160,7 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
                     };
                     out.message = Some(format!("{}{hint}", error.message));
                     out.files = file_rows(&error.completed_files);
+                    out.file_count = error.completed_files.len();
                 }
                 JobState::Done(BatchResult::NotStarted { .. }) => {
                     out.message =
@@ -152,84 +173,114 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
         .collect()
 }
 
-fn fill_complete(out: &mut OstReport, report: &ConversionReport, tree: &[Folder]) {
+fn fill_complete(
+    out: &mut OstReport,
+    report: &StreamedReport,
+    tree: &[Folder],
+) -> std::io::Result<()> {
     out.evidence = vec![
         evidence_row(
             "Headers-only items",
             "Only the header was downloaded; the body and attachments are missing.",
             &report.evidence.headers_only,
             tree,
-        ),
+        )?,
         evidence_row(
             "Unreadable content",
             "Content PstOff couldn’t read from the OST.",
             &report.evidence.unreadable,
             tree,
-        ),
+        )?,
         evidence_row(
             "External attachment references",
             "Links to files kept outside the mailbox. These aren’t missing content.",
             &report.evidence.external_references,
             tree,
-        ),
+        )?,
     ];
-    out.items = report.folders.iter().map(|f| f.items).sum();
-    let mut folders: Vec<_> = report.folders.iter().map(|f| &f.folder).collect();
-    folders.sort_by_key(|f| f.0);
-    folders.dedup();
-    out.folders = folders.len() as u64;
-    out.files = file_rows(&report.files);
-    let parts: std::collections::BTreeSet<u32> = report.files.iter().map(|f| f.part).collect();
-    if parts.len() > 1 {
+    // A disk index counts distinct folders without retaining one owner per folder.
+    let (items, folders) = report.summary_counts()?;
+    out.items = items;
+    out.folders = folders;
+    out.files = report
+        .files
+        .iter()
+        .take(SHOWN)
+        .map(|f| {
+            let f = f?;
+            Ok(FileRow {
+                path: f.path,
+                size: format::bytes(f.bytes),
+                part: f.part,
+            })
+        })
+        .collect::<std::io::Result<_>>()?;
+    if report.files.len() > 1 {
         out.folder_parts = report
             .folders
             .iter()
-            .map(|f| FolderPartRow {
-                folder: folder_path(tree, &f.folder),
-                part: f.part,
-                items: f.items,
+            .take(SHOWN)
+            .map(|f| {
+                let f = f?;
+                Ok(FolderPartRow {
+                    folder: folder_path(tree, &f.folder),
+                    part: f.part,
+                    items: f.items,
+                })
             })
-            .collect();
+            .collect::<std::io::Result<_>>()?;
     }
+    out.file_count = report.files.len();
+    out.folder_part_count = report.folders.len();
+    out.skipped_count = report.skipped.len();
+    out.difference_count = report.differences.len();
     out.skipped = report
         .skipped
         .iter()
+        .take(SHOWN)
         .map(|s| {
+            let s = s?;
             let what = match &s.reference {
                 LocalRef::Folder(folder) => format!("Folder {}", folder_path(tree, folder)),
                 LocalRef::Item(item) => item_label(tree, item),
             };
-            (what, s.reason.clone())
+            Ok((what, s.reason.clone()))
         })
-        .collect();
+        .collect::<std::io::Result<_>>()?;
     out.differences = report
         .differences
         .iter()
-        .map(|d| DifferenceRow {
-            property: format!("0x{:08x}", d.property),
-            item: d
-                .item
-                .as_ref()
-                .map(|i| item_label(tree, i))
-                .unwrap_or_else(|| "Store".into()),
-            source: d.source.clone(),
-            reason: d.reason.clone(),
+        .take(SHOWN)
+        .map(|d| {
+            let d = d?;
+            Ok(DifferenceRow {
+                property: format!("0x{:08x}", d.property),
+                item: d
+                    .item
+                    .as_ref()
+                    .map(|i| item_label(tree, i))
+                    .unwrap_or_else(|| "Store".into()),
+                source: d.source.clone(),
+                reason: d.reason.clone(),
+            })
         })
-        .collect();
+        .collect::<std::io::Result<_>>()?;
+    Ok(())
 }
 
 fn evidence_row(
     label: &'static str,
     note: &'static str,
-    evidence: &Evidence,
+    evidence: &Evidence<pstoff_engine::Records<ItemRef>>,
     tree: &[Folder],
-) -> EvidenceRow {
-    match evidence {
+) -> std::io::Result<EvidenceRow> {
+    Ok(match evidence {
         Evidence::NotChecked => EvidenceRow {
             label,
             value: "Not checked".into(),
             note,
             references: Vec::new(),
+            reference_count: 0,
         },
         Evidence::Incomplete {
             count,
@@ -239,15 +290,17 @@ fn evidence_row(
             label,
             value: format!("{} found; {} not checked", count, unchecked.len()),
             note,
+            reference_count: references.len() + unchecked.len(),
             references: references
                 .iter()
-                .map(|r| item_label(tree, r))
+                .map(|r| r.map(|r| item_label(tree, &r)))
                 .chain(
                     unchecked
                         .iter()
-                        .map(|r| format!("Not checked: {}", item_label(tree, r))),
+                        .map(|r| r.map(|r| format!("Not checked: {}", item_label(tree, &r)))),
                 )
-                .collect(),
+                .take(SHOWN)
+                .collect::<std::io::Result<_>>()?,
         },
         Evidence::Checked { count, references } => EvidenceRow {
             label,
@@ -257,9 +310,14 @@ fn evidence_row(
                 format::plural(*count, "item", "items")
             },
             note,
-            references: references.iter().map(|r| item_label(tree, r)).collect(),
+            reference_count: references.len(),
+            references: references
+                .iter()
+                .take(SHOWN)
+                .map(|r| r.map(|r| item_label(tree, &r)))
+                .collect::<std::io::Result<_>>()?,
         },
-    }
+    })
 }
 
 /// Local references only: node ID and folder path, never subjects or addresses.
@@ -274,6 +332,7 @@ pub fn item_label(tree: &[Folder], item: &ItemRef) -> String {
 fn file_rows(files: &[OutputFile]) -> Vec<FileRow> {
     files
         .iter()
+        .take(SHOWN)
         .map(|f| FileRow {
             path: f.path.clone(),
             size: format::bytes(f.bytes),
