@@ -4,7 +4,7 @@
 
 <h1 align="center">PstOff</h1>
 
-<p align="center">An MIT-licensed Windows OST-to-PST converter. Under construction.</p>
+<p align="center">A Windows OST-to-PST converter. Under construction.</p>
 
 PstOff turns an Outlook OST into a conventional Unicode PST, with a CLI and a
 guided GUI wizard over the same engine. The source is only ever read; output
