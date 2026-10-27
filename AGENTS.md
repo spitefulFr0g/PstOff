@@ -14,6 +14,10 @@ Uses the five default triage labels: `needs-triage`, `needs-info`, `ready-for-ag
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+## Delivery
+
+Before implementation, delegation, review or handoff, read `docs/agents/delivery.md` and `docs/current-work.md` for scope, acceptance evidence and the next action.
+
 ## Machine
 
 Windows host: develop only in this checkout. Before a build, a check, a WSL command or a Windows Sandbox run, read `docs/agents/environment.md`.

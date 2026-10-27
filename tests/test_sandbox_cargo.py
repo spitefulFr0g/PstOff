@@ -15,6 +15,40 @@ SPEC.loader.exec_module(sandbox_cargo)
 
 
 class SandboxCargoTests(unittest.TestCase):
+    def test_fast_mode_skips_only_the_large_memory_gate(self):
+        self.assertEqual(sandbox_cargo.check_commands(), sandbox_cargo.CHECK_COMMANDS)
+        fast = sandbox_cargo.check_commands(fast=True)
+        for full_command, fast_command in zip(sandbox_cargo.CHECK_COMMANDS, fast):
+            if full_command == ("test", "--locked", "--workspace"):
+                self.assertEqual(fast_command, full_command + (
+                    "--", "--skip", "large_generated_ost_has_fixed_separate_process_peak"))
+            else:
+                self.assertEqual(fast_command, full_command)
+        with tempfile.TemporaryDirectory() as temp:
+            script = Path(temp) / "guest.cmd"
+            sandbox_cargo.make_guest_script(script, (), is_check=True, fast=True)
+            self.assertIn("--skip large_generated_ost_has_fixed_separate_process_peak", script.read_text())
+            self.assertIn("python-tests.exit", script.read_text())
+
+    def test_progress_reports_before_completion_and_retries_partial_markers(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch("builtins.print") as output:
+            root = Path(temp)
+            reporter = sandbox_cargo.GuestProgress(root)
+            (root / "stage.txt").write_text("cargo-3: test", encoding="ascii")
+            (root / "cargo-2.exit").write_text("", encoding="ascii")
+            reporter()
+            self.assertNotIn("cargo-2.exit", reporter.completed)
+            (root / "cargo-2.exit").write_text("1", encoding="ascii")
+            reporter()
+            reporter()
+            messages = [call.args[0] for call in output.call_args_list]
+            self.assertTrue(any("cargo-3: test" in message for message in messages))
+            self.assertEqual(sum("cargo-2 finished: exit 1" in message for message in messages), 1)
+            self.assertFalse((root / "finished.txt").exists())
+            with mock.patch.object(sandbox_cargo.time, "monotonic", return_value=reporter.last_report + 31):
+                reporter()
+            self.assertIn("cargo-3: test", output.call_args.args[0])
+
     def test_checks_cover_every_workspace_crate(self):
         commands = sandbox_cargo.CHECK_COMMANDS
         self.assertIn(("fmt", "--all", "--", "--check"), commands)

@@ -14,6 +14,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 
 EXIT_SANDBOX_RUNNING = 3
@@ -47,6 +48,49 @@ GUEST_ENVIRONMENT = (
     r'C:\PstOffHostVC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe"',
     r'set "GPUI_FXC_PATH=C:\PstOffWindowsKits\bin\10.0.26100.0\x64\fxc.exe"',
 )
+
+
+def check_commands(fast: bool = False) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        command + ("--", "--skip", "large_generated_ost_has_fixed_separate_process_peak")
+        if fast and command == ("test", "--locked", "--workspace") else command
+        for command in CHECK_COMMANDS
+    )
+
+
+class GuestProgress:
+    """Report stage transitions and elapsed time without exposing log contents."""
+
+    def __init__(self, output: Path):
+        self.output = output
+        self.started = time.monotonic()
+        self.last_report = self.started
+        self.stage = "Starting Windows Sandbox"
+        self.completed: set[str] = set()
+        print(f"Sandbox logs: {output}", flush=True)
+
+    def __call__(self) -> None:
+        now = time.monotonic()
+        try:
+            stage = (self.output / "stage.txt").read_text(encoding="ascii").strip()
+        except OSError:
+            stage = ""
+        changed = bool(stage and stage != self.stage)
+        if changed:
+            self.stage = stage
+        if changed or now - self.last_report >= 30:
+            print(f"[Sandbox +{now - self.started:.0f}s] {self.stage}", flush=True)
+            self.last_report = now
+        for marker in sorted(self.output.glob("*.exit")):
+            if marker.name in self.completed:
+                continue
+            try:
+                code = int(marker.read_text(encoding="ascii").strip())
+            except (OSError, ValueError):
+                continue
+            print(f"[Sandbox +{now - self.started:.0f}s] {marker.stem} finished: exit {code}; "
+                  f"log: {marker.with_suffix('.log')}", flush=True)
+            self.completed.add(marker.name)
 
 
 def repo_root() -> Path:
@@ -148,9 +192,12 @@ def close_sandbox(process: subprocess.Popen) -> None:
         raise RuntimeError("Windows Sandbox did not close after taskkill") from exc
 
 
-def wait_for_guest(process: subprocess.Popen, marker: Path, timeout_seconds: int) -> str:
+def wait_for_guest(process: subprocess.Popen, marker: Path, timeout_seconds: int,
+                   progress: Callable[[], None] | None = None) -> str:
     deadline = time.monotonic() + timeout_seconds
     while True:
+        if progress is not None:
+            progress()
         if marker.exists():
             return "finished"
         if process.poll() is not None:
@@ -209,8 +256,9 @@ def make_guest_script(
     cargo_args: tuple[str, ...],
     is_check: bool,
     is_probe: bool = False,
+    fast: bool = False,
 ) -> tuple[tuple[str, ...], ...]:
-    commands = CHECK_COMMANDS if is_check else (cargo_args,)
+    commands = check_commands(fast) if is_check else (cargo_args,)
     lines = ["@echo off", "setlocal", *GUEST_ENVIRONMENT]
     if is_probe:
         probe_command = (
@@ -225,6 +273,7 @@ def make_guest_script(
             r"C:\PstOffOutput\probe.log 2>&1"
         )
         lines.extend((
+            r"echo Network and source-write probe > C:\PstOffOutput\stage.txt",
             probe_command,
             "echo %ERRORLEVEL% > C:\\PstOffOutput\\probe.exit",
             "echo %ERRORLEVEL% > C:\\PstOffOutput\\finished.txt",
@@ -234,6 +283,7 @@ def make_guest_script(
         return ()
     lines.extend(
         (
+            r"echo Restoring build cache > C:\PstOffOutput\stage.txt",
             r"if exist C:\PstOffOutput\target robocopy C:\PstOffOutput\target C:\PstOffBuild\target /E /R:0 /W:0 /NFL /NDL /NJH /NJS /NP > C:\PstOffOutput\restore-target.log",
             r"if errorlevel 8 (echo 2 > C:\PstOffOutput\finished.txt & exit /b 2)",
             r"cd /d C:\PstOffSource",
@@ -247,6 +297,7 @@ def make_guest_script(
         code = f"C:\\PstOffOutput\\cargo-{index}.exit"
         lines.extend(
             (
+                f"echo cargo-{index}: {command[0]} > C:\\PstOffOutput\\stage.txt",
                 f"cargo {args} > {log} 2>&1",
                 'set "STEP_EXIT=%ERRORLEVEL%"',
                 f"echo %STEP_EXIT% > {code}",
@@ -255,6 +306,7 @@ def make_guest_script(
         )
     if is_check:
         lines.extend((
+            r"echo Python harness tests > C:\PstOffOutput\stage.txt",
             r'C:\PstOffPython\python.exe -I -S -B -m unittest discover -s C:\PstOffSource\tests -v > C:\PstOffOutput\python-tests.log 2>&1',
             'set "STEP_EXIT=%ERRORLEVEL%"',
             r'echo %STEP_EXIT% > C:\PstOffOutput\python-tests.exit',
@@ -262,6 +314,7 @@ def make_guest_script(
         ))
     lines.extend(
         (
+            r"echo Saving build cache > C:\PstOffOutput\stage.txt",
             r"if exist C:\PstOffBuild\target robocopy C:\PstOffBuild\target C:\PstOffOutput\target /E /R:0 /W:0 /NFL /NDL /NJH /NJS /NP > C:\PstOffOutput\save-target.log",
             'if errorlevel 8 set "FINAL_EXIT=2"',
             r"echo %FINAL_EXIT% > C:\PstOffOutput\finished.txt",
@@ -351,6 +404,7 @@ def run_wrapper(
     cargo_args: tuple[str, ...],
     is_check: bool = False,
     is_probe: bool = False,
+    fast: bool = False,
 ) -> int:
     root = repo_root()
     temp = temp_root()
@@ -358,6 +412,7 @@ def run_wrapper(
     persistent = temp / "PstOffSandboxCargo" / digest
     persistent.mkdir(parents=True, exist_ok=True)
     lock = temp / "PstOffSandboxCargo" / "sandbox.lock"
+    print("Waiting for the shared Sandbox lock...", flush=True)
     with host_lock(lock):
         active = sandbox_processes()
         if active:
@@ -368,12 +423,14 @@ def run_wrapper(
         cache = temp / "PstOffCargoCache"
         cache.mkdir(parents=True, exist_ok=True)
         if not is_probe:
+            print("Fetching locked dependencies (no build scripts)...", flush=True)
             fetch_dependencies(root, cache, rust)
         run_dir = Path(tempfile.mkdtemp(prefix="PstOffSandboxCargo-run-", dir=temp))
         source = run_dir / "source"
         output = persistent / "output-v2"
         output.mkdir(exist_ok=True)
-        for old in (*output.glob("cargo-*"), *output.glob("python-tests.*"), output / "finished.txt"):
+        for old in (*output.glob("cargo-*"), *output.glob("python-tests.*"),
+                    *output.glob("probe.*"), output / "finished.txt", output / "stage.txt"):
             if old.is_file():
                 old.unlink()
         try:
@@ -381,7 +438,7 @@ def run_wrapper(
             input_dir = run_dir / "input"
             input_dir.mkdir()
             script = input_dir / "guest.cmd"
-            make_guest_script(script, cargo_args, is_check, is_probe=is_probe)
+            make_guest_script(script, cargo_args, is_check, is_probe=is_probe, fast=fast)
             vc = required_path("PSTOFF_VC_ROOT", r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC")
             kits = required_path("PSTOFF_WINDOWS_KITS", r"C:\Program Files (x86)\Windows Kits\10")
             wsb = run_dir / "run.wsb"
@@ -394,8 +451,9 @@ def run_wrapper(
                 return EXIT_SANDBOX_RUNNING
             launcher = os.environ.get("PSTOFF_WINDOWS_SANDBOX", "WindowsSandbox.exe")
             process = subprocess.Popen([launcher, str(wsb)])
+            progress = GuestProgress(output)
             finished = output / "finished.txt"
-            state = wait_for_guest(process, finished, int(os.environ.get("PSTOFF_SANDBOX_TIMEOUT", DEFAULT_TIMEOUT_SECONDS)))
+            state = wait_for_guest(process, finished, int(os.environ.get("PSTOFF_SANDBOX_TIMEOUT", DEFAULT_TIMEOUT_SECONDS)), progress)
             if state == "closed":
                 print("Windows Sandbox closed before writing its completion marker.", file=sys.stderr)
                 return EXIT_CANNOT_RUN
@@ -435,6 +493,9 @@ def main(argv: list[str]) -> int:
         return EXIT_CANNOT_RUN
     if argv == ["--check"]:
         return run_wrapper((), is_check=True)
+    if argv == ["--check-fast"]:
+        print("FAST checks: skipping only the large process-memory regression.", flush=True)
+        return run_wrapper((), is_check=True, fast=True)
     if argv == ["--probe"]:
         return run_wrapper((), is_probe=True)
     return run_wrapper(tuple(argv))
