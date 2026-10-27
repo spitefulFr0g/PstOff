@@ -1,4 +1,10 @@
-# PstOff
+<p align="center">
+  <img src="docs/assets/pstoff-logo.png" alt="PstOff logo" width="200">
+</p>
+
+<h1 align="center">PstOff</h1>
+
+<p align="center">A Windows OST-to-PST converter. Under construction.</p>
 
 PstOff is an MIT-licensed Windows OST-to-PST converter under construction.
 The engine and CLI inspect supported v36 OSTs and perform a first Copy mode
