@@ -1,0 +1,17 @@
+[package]
+name = "outlook-pst"
+version = "1.2.0"
+edition = "2021"
+rust-version = "1.82"
+authors = ["Microsoft"]
+repository = "https://github.com/microsoft/outlook-pst-rs"
+license = "MIT"
+publish = false
+
+[dependencies]
+byteorder = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[package.metadata.pstoff]
+upstream-revision = "cfb721daee538acc50d2bad6faac5ce724f6037d"

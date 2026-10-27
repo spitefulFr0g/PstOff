@@ -1,0 +1,10 @@
+[package]
+name = "pstoff-format"
+version = "0.5.1"
+edition = "2021"
+license = "MIT"
+publish = false
+[dependencies]
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Globalization"] }

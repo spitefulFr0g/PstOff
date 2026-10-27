@@ -3,14 +3,15 @@
 
     scripts/libpff-check.py compare source.ost out.pst [--out DIR]   exit 0: only explained differences
     scripts/libpff-check.py tree store.pst                           folder tree with message counts
+    scripts/libpff-check.py synthetic-check generated-directory      assert generated #23 fixtures
 
 See docs/agents/faithful-checks.md.
 """
-import argparse, hashlib, json, os, subprocess, sys
+import argparse, hashlib, json, os, runpy, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PRIVATE = HERE.parent / 'testdata' / 'private'
+PRIVATE = (HERE.parent / 'testdata' / 'private').resolve()
 READER = Path(os.environ.get('PSTOFF_LIBPFF_ROOT', Path.home() / '.local/share/pstoff-independent-reader/root'))
 
 # Explained differences, decided on issue #11. Keys are 'tag:type'.
@@ -98,7 +99,18 @@ def main():
     c.add_argument('--out', type=Path, help='also write both full inventories here')
     t = sub.add_parser('tree')
     t.add_argument('store', type=Path)
+    s = sub.add_parser('synthetic-probe', help='hash-only synthetic fixture inventory')
+    s.add_argument('store', type=Path)
+    s = sub.add_parser('synthetic-check', help='validate explicitly generated #23 fixtures')
+    s.add_argument('directory', type=Path)
     args = parser.parse_args()
+    if args.command == 'synthetic-check':
+        check = runpy.run_path(str(HERE / 'check-synthetic.py'))['check']
+        check(args.directory, sandboxed)
+        return 0
+    if args.command == 'synthetic-probe':
+        print(sandboxed('synthetic_probe.py', args.store), end='')
+        return 0
     if args.command == 'tree':
         print(sandboxed('tree_probe.py', args.store), end='')
         return 0

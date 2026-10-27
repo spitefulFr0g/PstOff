@@ -1,0 +1,16 @@
+[package]
+name = "pstoff-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+[dependencies]
+pstoff-engine.workspace = true
+
+[dev-dependencies]
+serde_json = "=1.0.145"
+
+[[bin]]
+name = "pstoff"
+path = "src/main.rs"

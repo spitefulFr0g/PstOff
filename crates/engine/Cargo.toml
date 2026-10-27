@@ -1,0 +1,16 @@
+[package]
+name = "pstoff-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+[dependencies]
+serde.workspace = true
+outlook-pst.workspace = true
+pstoff-format = { path = "../../third-party/pstfree" }
+sha2 = "=0.10.9"
+serde_json = "=1.0.145"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem"] }

@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/engine", "crates/cli", "crates/gui", "third-party/pstfree", "third-party/outlook-pst"]
+default-members = ["crates/engine", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.89"
+
+[workspace.dependencies]
+pstoff-engine = { path = "crates/engine" }
+outlook-pst = { path = "third-party/outlook-pst" }
+serde = { version = "=1.0.228", features = ["derive"] }

@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Run audit, workspace Rust checks and Python harness tests in Windows Sandbox."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parent.parent
+raise SystemExit(
+    subprocess.run(
+        [sys.executable, str(root / "scripts" / "sandbox-cargo.py"), "--check"],
+        cwd=root,
+    ).returncode
+)

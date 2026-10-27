@@ -1,0 +1,38 @@
+name: Linux portable Cargo checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-cargo:
+    name: Portable inspection, validation, and format checks (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run Clippy for portable crates
+        run: cargo clippy --locked --all-targets -p pstoff-engine -p pstoff-cli -- -D warnings
+
+      # Windows-only product: Ubuntu provides portable feedback, not conversion acceptance.
+      # Engine tests that reach disk preflight are ignored on non-Windows but still
+      # compiled by Clippy --all-targets. Preflight-independent engine rejection,
+      # foundation, reader and synthetic inspection tests remain enabled.
+      # CLI conversion tests use cfg(windows); inspect/argument tests remain enabled.
+      # Format tests run here; conversion/preflight and GUI checks require Windows Sandbox.
+      - name: Test portable inspection, validation, and format behavior
+        run: cargo test --locked -p pstoff-engine -p pstoff-cli -p pstoff-format

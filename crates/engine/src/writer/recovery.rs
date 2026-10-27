@@ -1,0 +1,371 @@
+//! Validate source contexts before emitting anything. Output I/O errors remain fatal.
+use super::{context, system, table, Result};
+use crate::nodes::IdSet;
+use crate::*;
+use pstoff_format::{
+    ltp,
+    ndb::{Node, Pst},
+};
+use std::collections::BTreeMap;
+
+pub(crate) struct Recovery {
+    pub nodes: crate::nodes::Nodes,
+    pub system: system::SystemFolders,
+    pub created: BTreeMap<u32, String>,
+    pub omitted: IdSet,
+    pub skipped: Records<Skipped>,
+    pub evidence: CompletenessEvidence<Records<ItemRef>>,
+}
+
+// Use the same strict property/table readers as emission, including attachment,
+// recipient, embedded-message and raw payload subnodes. Never retain payload text
+// in errors: reports contain only local references and fixed reason codes.
+fn validate(
+    source: &mut Pst,
+    data: u64,
+    sub: u64,
+    depth: u32,
+    expected: Option<u8>,
+    cancel: &CancelToken,
+) -> Result<()> {
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
+    if depth > 32 {
+        return Err("Excessive context depth".into());
+    }
+    let first = source.node_chunks(data)?.next().transpose()?;
+    if let Some(kind) = expected {
+        if !first
+            .as_ref()
+            .is_some_and(|b| b.get(2) == Some(&0xec) && b.get(3) == Some(&kind))
+        {
+            return Err("Invalid typed context signature".into());
+        }
+        match kind {
+            0xbc => {
+                context::evidence_properties(source, data, sub, &[], cancel)?;
+            }
+            0x7c => {
+                table::read(source, data, sub, cancel)?;
+            }
+            _ => return Err("Invalid context".into()),
+        }
+    }
+    drop(first);
+    // Even untyped payloads must validate every block and both cbTotal levels.
+    for chunk in source.node_chunks(data)? {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        chunk?;
+    }
+    for n in crate::nodes::Nodes::namespace(source, sub, cancel)?.iter() {
+        let n = n?;
+        let id = n.nid;
+        let child = pstoff_format::ndb::Sub {
+            data: n.bid_data,
+            sub: n.bid_sub,
+        };
+        let kind = match id & 31 {
+            4 | 5 => Some(0xbc),
+            0x11 | 0x12 => Some(0x7c),
+            _ => None,
+        };
+        validate(source, child.data, child.sub, depth + 1, kind, cancel)?;
+    }
+    Ok(())
+}
+fn reference(n: &Node) -> ItemRef {
+    ItemRef {
+        folder: FolderRef(n.nid_parent),
+        node: n.nid,
+    }
+}
+fn evidence(
+    references: Records<ItemRef>,
+    unchecked: &Records<ItemRef>,
+) -> Evidence<Records<ItemRef>> {
+    let count = references.len() as u64;
+    if unchecked.is_empty() {
+        Evidence::Checked { count, references }
+    } else {
+        Evidence::Incomplete {
+            count,
+            references,
+            unchecked: unchecked.clone(),
+        }
+    }
+}
+
+fn readable<T>(result: Result<T>) -> Result<bool> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(e) if e.is::<std::io::Error>() => Err(e),
+        Err(_) => Ok(false),
+    }
+}
+pub(crate) fn prepare(
+    source: &mut Pst,
+    mut nodes: crate::nodes::Nodes,
+    cancel: &CancelToken,
+) -> Result<Recovery> {
+    let identity = system::resolve(source, &nodes)?;
+    let names = ltp::read_named_properties(
+        source,
+        &nodes
+            .iter()
+            .find(|n| n.nid == ltp::NID_NAME_TO_ID_MAP)?
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )?;
+    let header_ids: Vec<_> = names
+        .iter()
+        .filter(|(_, p)| {
+            p.guid == [8, 0x20, 6, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46]
+                && p.name == ltp::PropertyName::Id(0x8578)
+        })
+        .map(|(&id, _)| id)
+        .collect();
+    let mut omitted = IdSet::default();
+    let mut bad_folders = IdSet::default();
+    let mut skipped = Records::default();
+    for folder in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
+        let folder = folder?;
+        if cancel.is_cancelled() {
+            break;
+        }
+        let mut bad = !readable(validate(
+            source,
+            folder.bid_data,
+            folder.bid_sub,
+            0,
+            Some(0xbc),
+            cancel,
+        ))?;
+        for n in nodes
+            .iter()
+            .filter(|n| matches!(n.nid_type(), 0xd..=0xf) && n.nid & !31 == folder.nid & !31)
+        {
+            let n = n?;
+            bad |= !readable(validate(
+                source,
+                n.bid_data,
+                n.bid_sub,
+                0,
+                Some(0x7c),
+                cancel,
+            ))?;
+        }
+        if bad {
+            bad_folders.insert(folder.nid)?;
+        }
+    }
+    // Propagate unreadable folder boundaries iteratively; inspection rejects cycles.
+    let mut lost = bad_folders.copy(cancel)?;
+    loop {
+        let old = lost.len();
+        for n in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
+            let n = n?;
+            if n.nid != n.nid_parent && lost.contains(&n.nid_parent)? {
+                lost.insert(n.nid)?;
+            }
+        }
+        if old == lost.len() {
+            break;
+        }
+    }
+    for n in &nodes {
+        let n = n?;
+        if lost.contains(&n.nid)? && matches!(n.nid_type(), 2 | 3) {
+            omitted.insert(n.nid)?;
+            skipped.push(Skipped {
+                reference: LocalRef::Folder(FolderRef(n.nid)),
+                code: if bad_folders.contains(&n.nid)? {
+                    SkipReason::UnreadableFolder
+                } else {
+                    SkipReason::UnreadableAncestor
+                },
+                reason: "Folder or ancestor context could not be read; subtree skipped.".into(),
+            })?;
+        }
+        if matches!(n.nid_type(), 0xd..=0xf) && lost.contains_group(n.nid)? {
+            omitted.insert(n.nid)?;
+        }
+    }
+    let mut headers = Records::default();
+    let mut external = Records::default();
+    let mut unreadable = Records::default();
+    let mut unchecked = Records::default();
+    let mut header_unchecked = Records::default();
+    let mut external_unchecked = Records::default();
+    for n in nodes.iter().filter(|n| matches!(n.nid_type(), 4 | 8)) {
+        let n = n?;
+        if cancel.is_cancelled() {
+            break;
+        }
+        let item = reference(&n);
+        let ancestor = lost.contains(&n.nid_parent)?;
+        if ancestor
+            || !readable(crate::reader::item_properties(source, &n))?
+            || !readable(validate(
+                source,
+                n.bid_data,
+                n.bid_sub,
+                0,
+                Some(0xbc),
+                cancel,
+            ))?
+        {
+            omitted.insert(n.nid)?;
+            unreadable.push(item.clone())?;
+            unchecked.push(item.clone())?;
+            skipped.push(Skipped {
+                reference: LocalRef::Item(item),
+                code: if ancestor {
+                    SkipReason::UnreadableAncestor
+                } else {
+                    SkipReason::UnreadableItem
+                },
+                reason: if ancestor {
+                    "Item belongs to a skipped unreadable folder."
+                } else {
+                    "Item properties or nested content could not be read."
+                }
+                .into(),
+            })?;
+            continue;
+        }
+        let pc = context::evidence_properties(source, n.bid_data, n.bid_sub, &header_ids, cancel)?;
+        let mut header_unknown = false;
+        let mut positive = false;
+        for id in &header_ids {
+            match (pc.types.get(id), pc.props.get(id)) {
+                (None, None) => (),
+                (Some(3), Some(ltp::Value::Int(v))) if *v == 0 || *v == 1 => {
+                    positive |= *v == 1;
+                }
+                _ => header_unknown = true,
+            }
+        }
+        if positive {
+            headers.push(item.clone())?;
+        }
+        if header_unknown {
+            header_unchecked.push(item.clone())?;
+        }
+        // Walk nested Items as well. A reference is evidence of a reference,
+        // never proof of missing content or of reachability (conversion is offline).
+        let mut pending = crate::nodes::Pending::new(n.bid_sub)?;
+        let mut has_external = false;
+        let mut unknown_external = false;
+        while let Some((bid, depth)) = pending.pop()? {
+            if depth > 32 {
+                unknown_external = true;
+                break;
+            }
+            for n in crate::nodes::Nodes::namespace(source, bid, cancel)?.iter() {
+                let n = n?;
+                let id = n.nid;
+                let child = pstoff_format::ndb::Sub {
+                    data: n.bid_data,
+                    sub: n.bid_sub,
+                };
+                if id & 31 == 5 {
+                    let pc = context::evidence_properties(
+                        source,
+                        child.data,
+                        child.sub,
+                        &[0x3705, 0x3707, 0x370d, 0x3708, 0x3701],
+                        cancel,
+                    )?;
+                    match (pc.types.get(&0x3705), pc.props.get(&0x3705)) {
+                        (Some(3), Some(ltp::Value::Int(2 | 3 | 4 | 7))) => {
+                            let web = matches!(pc.props.get(&0x3705), Some(ltp::Value::Int(7)));
+                            let ids: &[u16] = if web { &[0x3707] } else { &[0x370d, 0x3708] };
+                            let valid = ids.iter().any(|id| {
+                                matches!(pc.types.get(id), Some(0x1f | 0x1e)) &&
+                                matches!(pc.props.get(id), Some(ltp::Value::Str(s)) if valid_target(s, web))
+                            }) && !pc.props.contains_key(&0x3701);
+                            has_external |= valid;
+                            unknown_external |= !valid;
+                        }
+                        (Some(3), Some(ltp::Value::Int(1 | 5 | 6))) => (),
+                        _ => unknown_external = true,
+                    }
+                }
+                pending.push(child.sub, depth + 1)?;
+            }
+        }
+        if has_external {
+            external.push(item.clone())?;
+        }
+        if unknown_external {
+            external_unchecked.push(item)?;
+        }
+    }
+    header_unchecked.append_cancellable(&unchecked, cancel)?;
+    external_unchecked.append_cancellable(&unchecked, cancel)?;
+    let highwater = nodes.iter().max_key(|n| n.nid & !31)?.unwrap_or(0x120);
+    nodes.retain(|n| Ok(!omitted.contains(&n.nid)?), cancel)?;
+    let (system, created) = system::repair(identity, &mut nodes, highwater)?;
+    Ok(Recovery {
+        nodes,
+        system,
+        created,
+        omitted,
+        skipped,
+        evidence: CompletenessEvidence {
+            headers_only: evidence(headers, &header_unchecked),
+            unreadable: evidence(unreadable, &Records::default()),
+            external_references: evidence(external, &external_unchecked),
+        },
+    })
+}
+
+// Validate a local reference's shape without opening or contacting its target.
+fn valid_target(s: &str, web: bool) -> bool {
+    if s.is_empty() || s.chars().any(|c| c.is_control()) {
+        return false;
+    }
+    if web {
+        if s.chars().any(|c| c.is_whitespace()) {
+            return false;
+        }
+        let Some(rest) = s
+            .strip_prefix("https://")
+            .or_else(|| s.strip_prefix("http://"))
+        else {
+            return false;
+        };
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        !authority.is_empty() && !authority.contains('@') && !authority.contains('\\')
+    } else {
+        Path::new(s).is_absolute()
+    }
+}
+
+pub(super) fn add_folder(
+    nodes: &mut crate::nodes::Nodes,
+    created: &mut BTreeMap<u32, String>,
+    id: u32,
+    parent: u32,
+    name: &str,
+) -> Result<()> {
+    nodes.push(Node {
+        nid: id,
+        nid_parent: parent,
+        bid_data: 0,
+        bid_sub: 0,
+    })?;
+    for kind in [0xd, 0xe, 0xf] {
+        nodes.push(Node {
+            nid: (id & !31) | kind,
+            nid_parent: 0,
+            bid_data: 0,
+            bid_sub: 0,
+        })?;
+    }
+    created.insert(id, name.into());
+    Ok(())
+}

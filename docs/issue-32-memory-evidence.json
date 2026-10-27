@@ -1,0 +1,74 @@
+{
+  "samples": [
+    {
+      "items": 16,
+      "item_payload_bytes": 262144,
+      "logical_payload_bytes": 4194304,
+      "peak_private_commit_bytes": 1159168,
+      "metric": "GetProcessMemoryInfo.PeakPagefileUsage",
+      "profile": "debug",
+      "source_sha256": "525bd9079d1b24273e56fef3f9d16aa80070503cb2d63511d3618db62f04006f",
+      "source_bytes": 4370432,
+      "output_bytes": 4372480
+    },
+    {
+      "items": 256,
+      "item_payload_bytes": 262144,
+      "logical_payload_bytes": 67108864,
+      "peak_private_commit_bytes": 1339392,
+      "metric": "GetProcessMemoryInfo.PeakPagefileUsage",
+      "profile": "debug",
+      "source_sha256": "d2dee54b6d873944f27cbeed70ba9b3fb08ac9316b05e77ba759abb9eedf2dfd",
+      "source_bytes": 69484544,
+      "output_bytes": 69643264
+    },
+    {
+      "items": 1024,
+      "item_payload_bytes": 262144,
+      "logical_payload_bytes": 268435456,
+      "peak_private_commit_bytes": 1474560,
+      "metric": "GetProcessMemoryInfo.PeakPagefileUsage",
+      "profile": "debug",
+      "source_sha256": "a4dbf094a717bf8ad89ff7f294d3b4a3465d88eb7c85c03108d902cf1abd36b3",
+      "source_bytes": 277856256,
+      "output_bytes": 278497792
+    },
+    {
+      "items": 4096,
+      "item_payload_bytes": 262144,
+      "logical_payload_bytes": 1073741824,
+      "peak_private_commit_bytes": 1662976,
+      "metric": "GetProcessMemoryInfo.PeakPagefileUsage",
+      "profile": "debug",
+      "source_sha256": "422e636c3c86b7136759bb064323234779d80e040a5ee3420b32ae846c506a71",
+      "source_bytes": 1111334912,
+      "output_bytes": 1113930752
+    }
+  ],
+  "expected_case_count": 4,
+  "complete": true,
+  "control": {
+    "touched_allocation_bytes": 33554432,
+    "peak_private_commit_bytes": 34422784
+  },
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-pc-windows-msvc\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "cargo_lock_sha256": "242435012302e120a1d5b64a1b4af5fd09bb594ea2f7f5b9c022a3e9a45f37da",
+  "ceiling_bytes": 8388608,
+  "payloads_verified": true,
+  "source_immutability_verified": true,
+  "validation": {
+    "route": "approved Windows Sandbox scripts; generated synthetic inputs only",
+    "base_revision": "a787ceb",
+    "memory_gate_seconds": 857.24,
+    "memory_gate_passed": true,
+    "workspace_replay_passed": 216,
+    "workspace_replay_filtered_unchanged_memory_gate": true,
+    "reader_tests_passed": 17,
+    "fmt_exit": 0,
+    "clippy_all_targets_exit": 0,
+    "gui_smoke_example_exit": 0,
+    "guest_python_tests_passed": 26,
+    "windows_dependency_packages_audited": 376,
+    "initial_full_script_workspace_failure": "Two unordered reader fixtures; corrected and replayed without weakening validation"
+  }
+}
