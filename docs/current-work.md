@@ -6,46 +6,54 @@ agent activity from task events.
 
 ## Latest delivery
 
-Direct user request: implement the retrospective's recommended delivery,
-check-feedback and handoff improvements, then merge a focused tooling PR.
-Branch: `chore/delivery-workflow`.
-[PR #51](https://github.com/spitefulFr0g/PstOff/pull/51) records live delivery state.
+Active issue: [#48](https://github.com/spitefulFr0g/PstOff/issues/48),
+Windows Sandbox cargo wrapper for every build and test. Branch:
+`chore/issue-48-sandbox-acceptance`, based on `e2d8f57` (`main` after PR #51).
+
+The wrapper (`scripts/sandbox-cargo.py`), `scripts/check` routing, doc updates
+and removal of `scripts/cargo-sandboxed` landed in `main` through PR #49
+(`92b550d`). Unit tests mock the Sandbox boundary. This delivery records real
+host evidence for each acceptance criterion and fixes any defect that evidence
+exposes.
 
 Acceptance and proof:
 
-- Default and `--full` retain every prescribed check. `--fast` skips only the
-  named large memory regression; command selection and exit propagation tests.
-- A running Sandbox reports stages, elapsed time and log paths before completion;
-  stage/partial-marker/heartbeat regressions plus a real Sandbox run.
-- Delivery instructions fix scope before coding and give reviewers that same
-  scope; this record supplies branch, evidence, blockers and next action.
+- `python scripts/check` passes with every Cargo step in Windows Sandbox:
+  a full check run on this branch.
+- A guest probe shows networking off and a source-mapping write failing:
+  `python scripts/sandbox-cargo.py --probe` output.
+- Two concurrent calls from different worktrees both succeed, serialized:
+  two simultaneous wrapper runs (this checkout and a temporary worktree) with
+  lock-wait and completion timestamps.
+- A Sandbox the wrapper did not start yields the distinct exit (3) and stays
+  running: a separately launched Sandbox, wrapper exit code and the Sandbox
+  process before and after.
+- An unfinished guest is closed after the timeout and reported as exit 2:
+  a run with a short `PSTOFF_SANDBOX_TIMEOUT`, exit code and no Sandbox
+  process afterwards.
+- The worktree is byte-identical after a run: a SHA-256 manifest of every
+  worktree file (excluding `.git`) before and after a wrapper run.
+- Safety and environment docs name the wrapper and nothing calls
+  `scripts/cargo-sandboxed`: grep.
 
-Stopping point: this tooling PR merged. Product behavior, Faithful policy and
-issue cleanup are follow-ups outside this task.
+Evidence is recorded in [issue-48-sandbox-acceptance.md](issue-48-sandbox-acceptance.md).
+
+Stopping point: a PR with the evidence (and any fixes) that closes #48.
+GUI launch and screenshot smoke runs stay in #37.
 
 ## Implementation and validation
 
-Implementation complete on `chore/delivery-workflow`, based on `3d39f7d`.
-`python scripts/check --fast` passed in Windows Sandbox: audit, formatting,
-Clippy, workspace tests with only the memory gate filtered, GUI smoke example
-and 30 Python harness tests. Live output showed stages, elapsed time and exit
-codes before completion. Sol reviewed the scope in one round; its sole finding
-was fixed by dropping the optional Linux Python-test step (the harness uses a
-Windows-only lock). No other actionable findings were reported.
-`python scripts/check --full` also passed: the full workspace suite including
-the memory regression, audit, formatting, Clippy, GUI example and 30 Python
-tests. Both observed Sandbox runs cover the tooling behavior in `2fd7a41`;
-the subsequent edit only records this evidence. Hosted Ubuntu CI passed on
-`2fd7a41`; consult PR #51 for the final documentation revision's check/merge
-state. No outstanding review finding or implementation blocker remains.
+Every acceptance criterion is evidenced against the unchanged wrapper at
+`e2d8f57`; see [issue-48-sandbox-acceptance.md](issue-48-sandbox-acceptance.md).
+`python scripts/check --full` passed in Windows Sandbox. The real runs exposed
+no wrapper defect. The only code-adjacent change removes the stale
+`scripts/cargo-sandboxed` entry from `.gitattributes`.
 
-Implementation and validation are complete. Delivery stops when PR #51 merges.
-The next session should verify that state, then select one focused product issue.
+Next action: open the PR that closes #48, review it and merge.
 
 ## Product baseline
 
 [PR #49](https://github.com/spitefulFr0g/PstOff/pull/49) merged at `3d39f7d`;
 issue #32 is closed. [Its evidence](issue-32-progress-cancel.md) establishes the
 generated-corpus memory gate. Broader memory contracts, public-fixture and
-Faithful acceptance remain open. Select one focused issue for the next product
-PR after the current tooling task completes.
+Faithful acceptance remain open. The tooling PR #51 merged at `e2d8f57`.
