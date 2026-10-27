@@ -20,21 +20,31 @@ pub(crate) struct Recovery {
 // Use the same strict property/table readers as emission, including attachment,
 // recipient, embedded-message and raw payload subnodes. Never retain payload text
 // in errors: reports contain only local references and fixed reason codes.
-fn validate(source: &mut Pst, data: u64, sub: u64, depth: u32, expected: Option<u8>) -> Result<()> {
+fn validate(
+    source: &mut Pst,
+    data: u64,
+    sub: u64,
+    depth: u32,
+    expected: Option<u8>,
+    cancel: &CancelToken,
+) -> Result<()> {
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
     if depth > 32 {
         return Err("Excessive context depth".into());
     }
-    let blocks = source.node_blocks(data)?;
+    let first = source.node_chunks(data)?.next().transpose()?;
     if let Some(kind) = expected {
-        if !blocks
-            .first()
+        if !first
+            .as_ref()
             .is_some_and(|b| b.get(2) == Some(&0xec) && b.get(3) == Some(&kind))
         {
             return Err("Invalid typed context signature".into());
         }
         match kind {
             0xbc => {
-                context::properties(source, data, sub)?;
+                context::relocation_properties(source, data, sub, cancel)?;
             }
             0x7c => {
                 table::read(source, data, sub)?;
@@ -42,13 +52,21 @@ fn validate(source: &mut Pst, data: u64, sub: u64, depth: u32, expected: Option<
             _ => return Err("Invalid context".into()),
         }
     }
+    drop(first);
+    // Even untyped payloads must validate every block and both cbTotal levels.
+    for chunk in source.node_chunks(data)? {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        chunk?;
+    }
     for (id, child) in source.subnodes(sub)? {
         let kind = match id & 31 {
             4 | 5 => Some(0xbc),
             0x11 | 0x12 => Some(0x7c),
             _ => None,
         };
-        validate(source, child.data, child.sub, depth + 1, kind)?;
+        validate(source, child.data, child.sub, depth + 1, kind, cancel)?;
     }
     Ok(())
 }
@@ -89,11 +107,19 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
         if cancel.is_cancelled() {
             break;
         }
-        let bad = validate(source, folder.bid_data, folder.bid_sub, 0, Some(0xbc)).is_err()
+        let bad = validate(
+            source,
+            folder.bid_data,
+            folder.bid_sub,
+            0,
+            Some(0xbc),
+            cancel,
+        )
+        .is_err()
             || nodes
                 .iter()
                 .filter(|n| matches!(n.nid_type(), 0xd..=0xf) && n.nid & !31 == folder.nid & !31)
-                .any(|n| validate(source, n.bid_data, n.bid_sub, 0, Some(0x7c)).is_err());
+                .any(|n| validate(source, n.bid_data, n.bid_sub, 0, Some(0x7c), cancel).is_err());
         if bad {
             bad_folders.insert(folder.nid);
         }
@@ -142,7 +168,7 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
         let ancestor = lost.contains(&n.nid_parent);
         if ancestor
             || crate::reader::item_properties(source, n).is_err()
-            || validate(source, n.bid_data, n.bid_sub, 0, Some(0xbc)).is_err()
+            || validate(source, n.bid_data, n.bid_sub, 0, Some(0xbc), cancel).is_err()
         {
             omitted.insert(n.nid);
             unreadable.push(item.clone());

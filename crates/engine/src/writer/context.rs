@@ -6,6 +6,9 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub(super) struct Cell {
     pub kind: u16,
+    // Relocation/selective reads may omit bytes when subnode is Some. Only
+    // explicitly selected exact tags may be used as table/policy operands;
+    // pc() reproduces the local reference without inspecting these bytes.
     pub bytes: Vec<u8>,
     // PC payload subnodes are relocated recursively with their original local
     // NID. Preserve that reference rather than also copying the payload into
@@ -22,6 +25,40 @@ fn inline(kind: u16) -> bool {
     matches!(kind, 2 | 3 | 4 | 0x0a | 0x0b)
 }
 pub(super) fn properties(source: &mut Pst, bid: u64, sub: u64) -> Result<Properties> {
+    read_properties(source, bid, sub, |_, _| true, None)
+}
+// Relocation preserves local subnode references in this context's namespace.
+// Payload bytes are validated, but never retained merely to copy that reference.
+pub(super) fn relocation_properties(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    cancel: &crate::CancelToken,
+) -> Result<Properties> {
+    read_properties(source, bid, sub, |_, _| false, Some(cancel))
+}
+pub(super) fn selected_properties(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    tags: &std::collections::BTreeSet<u32>,
+    cancel: &crate::CancelToken,
+) -> Result<Properties> {
+    read_properties(
+        source,
+        bid,
+        sub,
+        |id, kind| tags.contains(&((id as u32) << 16 | kind as u32)),
+        Some(cancel),
+    )
+}
+fn read_properties(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    materialize: impl Fn(u16, u16) -> bool,
+    cancel: Option<&crate::CancelToken>,
+) -> Result<Properties> {
     let heap = Heap::new(source.node_blocks(bid)?)?;
     let header = heap.item(heap.user_root)?;
     if header.len() != 8 || header[..3] != [0xb5, 2, 6] {
@@ -53,7 +90,18 @@ pub(super) fn properties(source: &mut Pst, bid: u64, sub: u64) -> Result<Propert
                 heap.item(value)?.to_vec()
             } else {
                 let node = subs.get(&value).ok_or("Missing property payload subnode")?;
-                source.node_blocks(node.data)?.concat()
+                let mut bytes = Vec::new();
+                for chunk in source.node_chunks(node.data)? {
+                    // Callers discard this partial plan when cancellation is set.
+                    if cancel.is_some_and(crate::CancelToken::is_cancelled) {
+                        return Ok(cells);
+                    }
+                    let chunk = chunk?;
+                    if materialize(id, kind) {
+                        bytes.extend_from_slice(&chunk);
+                    }
+                }
+                bytes
             };
             let subnode = (!inline(kind) && value & 31 != 0).then_some(value);
             if cells

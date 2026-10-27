@@ -7,6 +7,8 @@ mod context;
 mod store;
 mod system;
 mod table;
+#[cfg(test)]
+mod tests;
 use outlook_pst::{PstFile, UnicodePstFile};
 use pstoff_format::ndb::{crc32, Node, Pst};
 use std::{
@@ -44,6 +46,7 @@ impl Drop for Partial<'_> {
 }
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 struct Output {
+    cancel: crate::CancelToken,
     file: File,
     pos: u64,
     next: u64,
@@ -162,8 +165,61 @@ impl Output {
         }
         self.block(&b, true)
     }
+    // Keep only one data buffer and one bounded group per XBLOCK level.
+    fn source_stream(&mut self, source: &mut Pst, bid: u64, heap: bool) -> Result<u64> {
+        let mut leaves = Vec::with_capacity(1021);
+        let mut parents = Vec::with_capacity(1021);
+        let mut buffer = Vec::with_capacity(MAX);
+        for chunk in source.node_chunks(bid)? {
+            if self.cancel.is_cancelled() {
+                return Ok(0);
+            }
+            let chunk = chunk?;
+            if heap && chunk.len() > MAX {
+                return Err("Oversized table heap requires rebuilding".into());
+            }
+            let mut rest = chunk.as_slice();
+            while !rest.is_empty() {
+                let take = rest.len().min(MAX - buffer.len());
+                buffer.extend_from_slice(&rest[..take]);
+                rest = &rest[take..];
+                if buffer.len() == MAX || heap {
+                    leaves.push((self.block(&buffer, false)?, buffer.len() as u64));
+                    buffer.clear();
+                    if leaves.len() == 1021 {
+                        if parents.len() == 1021 {
+                            return Err("PST stream exceeds two XBLOCK levels".into());
+                        }
+                        parents.push((self.array(&leaves, 1)?, leaves.iter().map(|p| p.1).sum()));
+                        leaves.clear();
+                    }
+                }
+            }
+        }
+        if !buffer.is_empty() {
+            leaves.push((self.block(&buffer, false)?, buffer.len() as u64));
+        }
+        if parents.is_empty() {
+            return match leaves.len() {
+                0 => Ok(0),
+                1 => Ok(leaves[0].0),
+                _ => self.array(&leaves, 1),
+            };
+        }
+        if !leaves.is_empty() {
+            if parents.len() == 1021 {
+                return Err("PST stream exceeds two XBLOCK levels".into());
+            }
+            parents.push((self.array(&leaves, 1)?, leaves.iter().map(|p| p.1).sum()));
+        }
+        if parents.len() == 1 {
+            Ok(parents[0].0)
+        } else {
+            self.array(&parents, 2)
+        }
+    }
     fn subtree(&mut self, source: &mut Pst, bid: u64, depth: u32) -> Result<u64> {
-        if bid == 0 {
+        if bid == 0 || self.cancel.is_cancelled() {
             return Ok(0);
         }
         if depth > 32 {
@@ -225,16 +281,20 @@ impl Output {
         if depth > 32 {
             return Err("Excessive context depth".into());
         }
-        let blocks = source.node_blocks(bid)?;
-        if blocks
-            .first()
+        if self.cancel.is_cancelled() {
+            return Ok((0, 0));
+        }
+        let first = source.node_chunks(bid)?.next().transpose()?;
+        if first
+            .as_ref()
             .is_some_and(|b| b.len() > 3 && b[2] == 0xec && matches!(b[3], 0xbc | 0x7c))
         {
-            let is_pc = blocks[0][3] == 0xbc;
+            let is_pc = first.as_ref().unwrap()[3] == 0xbc;
+            drop(first);
             let cells = if is_pc {
                 Some(match override_cells {
                     Some(c) => c.clone(),
-                    None => context::properties(source, bid, sub)?,
+                    None => context::relocation_properties(source, bid, sub, &self.cancel)?,
                 })
             } else {
                 None
@@ -244,6 +304,9 @@ impl Output {
             } else {
                 Some(table::read(source, bid, sub)?)
             };
+            if self.cancel.is_cancelled() {
+                return Ok((0, 0));
+            }
             if let Some(table) = &mut table {
                 // Omitted references are global NIDs. Nested recipient/attachment
                 // table row IDs live in local namespaces and must remain untouched.
@@ -312,6 +375,9 @@ impl Output {
             subs.sort_by_key(|s| s.0);
             let mut next = subs.iter().map(|s| s.0 >> 5).max().unwrap_or(0) + 1;
             for (nid, s) in subs {
+                if self.cancel.is_cancelled() {
+                    return Ok((0, 0));
+                }
                 let (data, below) = self.context(source, s.data, s.sub, depth + 1)?;
                 entries.push((nid, data, below));
             }
@@ -337,17 +403,9 @@ impl Output {
             let data = self.stream(&heap.finish(root))?;
             Ok((data, below))
         } else {
-            if blocks
-                .first()
-                .is_some_and(|b| b.len() > MAX && b.get(2) == Some(&0xec))
-            {
-                return Err("Oversized table heap requires rebuilding".into());
-            }
-            let data = if blocks.first().is_some_and(|b| b.get(2) == Some(&0xec)) {
-                self.stream(&blocks)?
-            } else {
-                self.stream(&[blocks.concat()])?
-            };
+            let heap = first.as_ref().is_some_and(|b| b.get(2) == Some(&0xec));
+            drop(first);
+            let data = self.source_stream(source, bid, heap)?;
             Ok((data, self.subtree(source, sub, depth + 1)?))
         }
     }
@@ -445,6 +503,7 @@ pub(super) fn write(
         .open(path)?;
     let mut partial = Partial { path, keep: false };
     let mut out = Output {
+        cancel: cancel.clone(),
         file,
         pos: AMAP + 2048,
         next: 1,

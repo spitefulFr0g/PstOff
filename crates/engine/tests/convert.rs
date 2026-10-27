@@ -1643,8 +1643,10 @@ fn microsoft_reader_verifies_recipients_attachment_bytes_and_associated_item_pro
         PstFile, UnicodePstFile,
     };
     use synthetic::{Attachment, Property, Recipient};
-    let payload: Vec<_> = (0..40_000u32).map(|i| i.wrapping_mul(31) as u8).collect();
-    let embedded_payload: Vec<_> = (0..18_000u32)
+    // Cross many unequal 8000-byte source / 8176-byte writer boundaries, in
+    // repeated attachment-local namespaces in both ordinary and associated Items.
+    let payload: Vec<_> = (0..180_000u32).map(|i| i.wrapping_mul(31) as u8).collect();
+    let embedded_payload: Vec<_> = (0..140_000u32)
         .map(|i| i.wrapping_mul(17).wrapping_add(3) as u8)
         .collect();
     let mut items = vec![];

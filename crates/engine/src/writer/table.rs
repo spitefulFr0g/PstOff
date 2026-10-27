@@ -23,7 +23,7 @@ fn variable(kind: u16) -> bool {
     matches!(kind, 0x1e | 0x1f | 0x102 | 0x0d | 0x48) || kind & 0x1000 != 0
 }
 pub(super) struct Table {
-    columns: Vec<(u32, usize)>,
+    pub(super) columns: Vec<(u32, usize)>,
     pub(super) pair_cache: bool,
     pub(super) time_cache: bool,
     pub(super) rows: Vec<(u32, u32, BTreeMap<u32, Cell>)>,
@@ -185,7 +185,20 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
                     if matches!(tag >> 16, 0x65e2 | 0x65e3) && structural.contains(&hnid) {
                         return Err("Q15 cell aliases table structure".into());
                     }
-                    resolve(source, hnid)?.concat()
+                    if hnid == 0 {
+                        vec![]
+                    } else if hnid & 31 == 0 {
+                        heap.item(hnid)?.to_vec()
+                    } else {
+                        // Policy/table cells still own their value, but do not
+                        // also retain every decoded block before concatenation.
+                        let bid = subs.get(&hnid).ok_or("Missing table payload")?.data;
+                        let mut bytes = Vec::new();
+                        for chunk in source.node_chunks(bid)? {
+                            bytes.extend_from_slice(&chunk?);
+                        }
+                        bytes
+                    }
                 } else {
                     row[*at..at + size].to_vec()
                 };

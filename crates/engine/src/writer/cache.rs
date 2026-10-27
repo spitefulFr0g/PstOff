@@ -15,6 +15,7 @@ pub(super) fn prepare(
     omitted: &std::collections::HashSet<u32>,
 ) -> Result<Option<BTreeMap<u32, Properties>>> {
     let mut planned = BTreeMap::new();
+    let mut required = std::collections::BTreeSet::new();
     let mut observations: BTreeMap<u32, Vec<(u32, bool, bool, Properties)>> = BTreeMap::new();
     for node in nodes
         .iter()
@@ -24,6 +25,7 @@ pub(super) fn prepare(
             return Ok(None);
         }
         let table = table::read(source, node.bid_data, node.bid_sub)?;
+        required.extend(table.columns.iter().map(|c| c.0));
         for (nid, _, cells) in table.rows {
             if omitted.contains(&nid) {
                 continue;
@@ -50,7 +52,11 @@ pub(super) fn prepare(
         if cancel.is_cancelled() {
             return Ok(None);
         }
-        let mut own = context::properties(source, node.bid_data, node.bid_sub)?;
+        let mut own =
+            context::selected_properties(source, node.bid_data, node.bid_sub, &required, cancel)?;
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
         if let std::collections::btree_map::Entry::Vacant(entry) = own.entry(0x3008) {
             if let Some(all) = observations.get(&node.nid) {
                 let rows: Vec<_> = all.iter().filter(|r| r.2).collect();

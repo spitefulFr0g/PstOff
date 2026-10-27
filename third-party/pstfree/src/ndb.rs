@@ -13,6 +13,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 mod index;
+mod stream;
+pub use stream::NodeChunks;
 
 /// `!BDN` at offset 0. Every PST and OST starts with it.
 const MAGIC: u32 = 0x4E44_4221;
