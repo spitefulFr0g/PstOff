@@ -163,6 +163,52 @@ impl Index {
     }
 }
 
+// Eight byte-radix levels; only one eight-byte slot is read at a time. Values
+// are encoded plus one, so zero-filled slots mean absent. Nodes are allocated
+// densely on disk, never with an attacker-controlled sparse-file offset.
+pub(crate) struct WideIndex(Spool);
+impl WideIndex {
+    pub fn new() -> Result<Self> {
+        let mut file = Spool::new()?;
+        file.append(&[0; 2048])?;
+        Ok(Self(file))
+    }
+    pub fn insert(&mut self, key: u64, value: u64) -> Result<Option<u64>> {
+        self.access(key, Some(value))
+    }
+    fn access(&mut self, key: u64, value: Option<u64>) -> Result<Option<u64>> {
+        let mut node = 0;
+        for (level, byte) in key.to_be_bytes().iter().enumerate() {
+            let at = node + u64::from(*byte) * 8;
+            let mut bytes = [0; 8];
+            self.0.read(at, &mut bytes)?;
+            let old = u64::from_le_bytes(bytes);
+            if level == 7 {
+                if let Some(value) = value {
+                    self.0.write(
+                        at,
+                        &value
+                            .checked_add(1)
+                            .ok_or("WideIndex value overflow")?
+                            .to_le_bytes(),
+                    )?;
+                }
+                return Ok(old.checked_sub(1));
+            }
+            if old == 0 {
+                if value.is_none() {
+                    return Ok(None);
+                }
+                node = self.0.append(&[0; 2048])?;
+                self.0.write(at, &node.to_le_bytes())?;
+            } else {
+                node = old;
+            }
+        }
+        unreachable!()
+    }
+}
+
 impl std::io::Write for Spool {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.append(bytes)

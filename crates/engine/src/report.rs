@@ -120,15 +120,25 @@ impl<T: Serialize + DeserializeOwned> Records<T> {
         mut keep: impl FnMut(&T) -> bool,
         cancel: &CancelToken,
     ) -> Result<()> {
+        self.try_retain_cancellable(|v| Ok(keep(v)), cancel)
+    }
+    pub(crate) fn try_retain_cancellable(
+        &mut self,
+        mut keep: impl FnMut(&T) -> io::Result<bool>,
+        cancel: &CancelToken,
+    ) -> Result<()> {
         let mut next = Self::default();
         for value in self.iter() {
             if cancel.is_cancelled() {
                 return Err(io::Error::other("Report processing cancelled"));
             }
             let value = value?;
-            if keep(&value) {
+            if keep(&value)? {
                 next.push(value)?;
             }
+        }
+        if cancel.is_cancelled() {
+            return Err(io::Error::other("Report processing cancelled"));
         }
         *self = next;
         Ok(())
@@ -444,5 +454,57 @@ mod tests {
         let mut copy = Records::default();
         assert!(copy.append_cancellable(&records, &token).is_err());
         assert!(copy.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+    #[test]
+    fn high_count_failure_and_cancellation_outcomes_keep_disk_records_and_schema() {
+        let mut files = Records::default();
+        for part in 1..=25_000 {
+            files
+                .push(OutputFile {
+                    path: format!("generated-{part}.pst").into(),
+                    bytes: u64::from(part),
+                    part,
+                })
+                .unwrap();
+        }
+        let error = EngineError {
+            kind: ErrorKind::Io,
+            message: "synthetic failure".into(),
+            completed_files: files.clone(),
+        };
+        let bytes = serde_json::to_vec(&error).unwrap();
+        #[derive(Serialize)]
+        struct Legacy<'a> {
+            kind: &'a ErrorKind,
+            message: &'a str,
+            completed_files: Vec<OutputFile>,
+        }
+        assert_eq!(
+            bytes,
+            serde_json::to_vec(&Legacy {
+                kind: &error.kind,
+                message: &error.message,
+                completed_files: files.collect_records().unwrap()
+            })
+            .unwrap()
+        );
+        let read: EngineError = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(read.completed_files.len(), 25_000);
+        let cancelled = Conversion::Cancelled {
+            completed_files: read.completed_files,
+        };
+        let roundtrip: Conversion =
+            serde_json::from_slice(&serde_json::to_vec(&cancelled).unwrap()).unwrap();
+        let Conversion::Cancelled { completed_files } = roundtrip else {
+            panic!("outcome changed")
+        };
+        assert_eq!(completed_files.len(), 25_000);
+        assert_eq!(completed_files.iter().last().unwrap().unwrap().part, 25_000);
+        assert!(std::mem::size_of_val(&error.completed_files) < 128);
     }
 }

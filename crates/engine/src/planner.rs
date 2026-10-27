@@ -1,17 +1,21 @@
 //! Selection uses global NIDs only; nested Item subnodes always travel whole.
+use crate::nodes::{IdSet, Nodes};
 use crate::*;
-use pstoff_format::ndb::Node;
-use std::collections::HashSet;
 
 pub(crate) fn excluded(
-    nodes: &[Node],
+    nodes: &Nodes,
     requested: &[FolderRef],
-) -> Result<HashSet<u32>, EngineError> {
-    let mut excluded = HashSet::new();
+    cancel: &CancelToken,
+) -> Result<IdSet, EngineError> {
+    let mut excluded = IdSet::default();
     for folder in requested {
+        if cancel.is_cancelled() {
+            return Err(node_failure("Exclusion planning cancelled".into()));
+        }
         if !nodes
             .iter()
             .any(|n| n.nid == folder.0 && matches!(n.nid_type(), 2 | 3))
+            .map_err(node_failure)?
         {
             return Err(EngineError {
                 kind: ErrorKind::InvalidOptions,
@@ -19,16 +23,27 @@ pub(crate) fn excluded(
                     "Excluded Folder 0x{:x} does not exist in this source.",
                     folder.0
                 ),
-                completed_files: vec![],
+                completed_files: Default::default(),
             });
         }
-        excluded.insert(folder.0);
+        excluded
+            .insert(folder.0)
+            .map_err(|e| node_failure(e.into()))?;
     }
     loop {
         let before = excluded.len();
         for node in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
-            if excluded.contains(&node.nid_parent) {
-                excluded.insert(node.nid);
+            if cancel.is_cancelled() {
+                return Err(node_failure("Exclusion planning cancelled".into()));
+            }
+            let node = node.map_err(node_failure)?;
+            if excluded
+                .contains(&node.nid_parent)
+                .map_err(|e| node_failure(e.into()))?
+            {
+                excluded
+                    .insert(node.nid)
+                    .map_err(|e| node_failure(e.into()))?;
             }
         }
         if before == excluded.len() {
@@ -40,20 +55,20 @@ pub(crate) fn excluded(
 
 pub(crate) struct Selection {
     pub recovery: writer::Recovery,
-    pub items: Vec<Node>,
-    system: HashSet<u32>,
-    excluded: HashSet<u32>,
+    pub items: Nodes,
+    system: [u32; 4],
+    excluded: IdSet,
 }
 
 fn selected_evidence(
     evidence: &mut Evidence<Records<ItemRef>>,
-    excluded: &HashSet<u32>,
+    excluded: &IdSet,
     cancel: &CancelToken,
 ) -> std::io::Result<()> {
     match evidence {
         Evidence::NotChecked => (),
         Evidence::Checked { count, references } => {
-            references.retain_cancellable(|i| !excluded.contains(&i.folder.0), cancel)?;
+            references.try_retain_cancellable(|i| Ok(!excluded.contains(&i.folder.0)?), cancel)?;
             *count = references.len() as u64;
         }
         Evidence::Incomplete {
@@ -61,9 +76,9 @@ fn selected_evidence(
             references,
             unchecked,
         } => {
-            references.retain_cancellable(|i| !excluded.contains(&i.folder.0), cancel)?;
+            references.try_retain_cancellable(|i| Ok(!excluded.contains(&i.folder.0)?), cancel)?;
             *count = references.len() as u64;
-            unchecked.retain_cancellable(|i| !excluded.contains(&i.folder.0), cancel)?;
+            unchecked.try_retain_cancellable(|i| Ok(!excluded.contains(&i.folder.0)?), cancel)?;
             if unchecked.is_empty() {
                 *evidence = Evidence::Checked {
                     count: *count,
@@ -78,16 +93,16 @@ fn selected_evidence(
 impl Selection {
     pub fn new(
         mut recovery: writer::Recovery,
-        excluded: HashSet<u32>,
+        excluded: IdSet,
         cancel: &CancelToken,
-    ) -> std::io::Result<Self> {
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // Recovery, selection and store emission share the resolved source roles.
-        let system = HashSet::from(recovery.system.ids());
+        let system = recovery.system.ids();
         if !excluded.is_empty() {
-            recovery.skipped.retain_cancellable(
+            recovery.skipped.try_retain_cancellable(
                 |s| match &s.reference {
-                    LocalRef::Folder(f) => !excluded.contains(&f.0),
-                    LocalRef::Item(i) => !excluded.contains(&i.folder.0),
+                    LocalRef::Folder(f) => Ok(!excluded.contains(&f.0)?),
+                    LocalRef::Item(i) => Ok(!excluded.contains(&i.folder.0)?),
                 },
                 cancel,
             )?;
@@ -99,13 +114,21 @@ impl Selection {
                 cancel,
             )?;
         }
-        let mut items: Vec<_> = recovery
+        let mut items = Nodes::new()?;
+        for n in recovery
             .nodes
             .iter()
-            .filter(|n| matches!(n.nid_type(), 4 | 8) && !excluded.contains(&n.nid_parent))
-            .cloned()
-            .collect();
-        items.sort_by_key(|n| n.nid);
+            .filter(|n| matches!(n.nid_type(), 4 | 8))
+        {
+            if cancel.is_cancelled() {
+                return Err("Selection cancelled".into());
+            }
+            let n = n?;
+            if !excluded.contains(&n.nid_parent)? {
+                items.push(n)?;
+            }
+        }
+        let items = items.sorted(cancel)?;
         Ok(Self {
             recovery,
             items,
@@ -114,58 +137,95 @@ impl Selection {
         })
     }
 
-    pub fn part(&self, items: &[Node], split: bool) -> writer::Recovery {
+    pub fn part(
+        &self,
+        range: std::ops::Range<usize>,
+        split: bool,
+        cancel: &CancelToken,
+    ) -> Result<writer::Recovery, Box<dyn std::error::Error>> {
         let all = &self.recovery.nodes;
-        let mut folders = self.system.clone();
-        if !split {
-            folders.extend(
-                all.iter()
-                    .filter(|n| matches!(n.nid_type(), 2 | 3) && !self.excluded.contains(&n.nid))
-                    .map(|n| n.nid),
-            );
+        let mut folders = IdSet::default();
+        for id in self.system {
+            folders.insert(id)?;
         }
-        folders.extend(items.iter().map(|n| n.nid_parent));
+        if !split {
+            for n in all.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
+                if cancel.is_cancelled() {
+                    return Err("Selection cancelled".into());
+                }
+                let n = n?;
+                if !self.excluded.contains(&n.nid)? {
+                    folders.insert(n.nid)?;
+                }
+            }
+        }
+        let mut selected = writer::spool::Index::new()?;
+        for i in range {
+            if cancel.is_cancelled() {
+                return Err("Selection cancelled".into());
+            }
+            let n = self.items.get(i)?.ok_or("Invalid selection range")?;
+            selected.insert(n.nid, 0)?;
+            folders.insert(n.nid_parent)?;
+        }
         loop {
             let before = folders.len();
             for node in all.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
-                if folders.contains(&node.nid) {
-                    folders.insert(node.nid_parent);
+                if cancel.is_cancelled() {
+                    return Err("Selection cancelled".into());
+                }
+                let node = node?;
+                if folders.contains(&node.nid)? {
+                    folders.insert(node.nid_parent)?;
                 }
             }
             if folders.len() == before {
                 break;
             }
         }
-        let mut part = writer::Recovery {
-            nodes: all
-                .iter()
-                .filter(|n| match n.nid_type() {
-                    2 | 3 => folders.contains(&n.nid),
-                    4 | 8 => items.binary_search_by_key(&n.nid, |n| n.nid).is_ok(),
-                    0xd..=0x10 => folders.iter().any(|id| id & !31 == n.nid & !31),
-                    _ => true,
-                })
-                .cloned()
-                .collect(),
+        let mut nodes = Nodes::new()?;
+        let mut omitted = self.recovery.omitted.copy(cancel)?;
+        for n in all {
+            if cancel.is_cancelled() {
+                return Err("Selection cancelled".into());
+            }
+            let n = n?;
+            let keep = match n.nid_type() {
+                2 | 3 => folders.contains(&n.nid)?,
+                4 | 8 => selected.get(n.nid)?.is_some(),
+                0xd..=0x10 => folders.contains_group(n.nid)?,
+                _ => true,
+            };
+            if keep {
+                nodes.push(n)?;
+            } else {
+                omitted.insert(n.nid)?;
+            }
+        }
+        let mut created = self.recovery.created.clone();
+        for id in self.recovery.created.keys() {
+            if nodes.by_id(*id)?.is_none() {
+                created.remove(id);
+            }
+        }
+        Ok(writer::Recovery {
+            nodes,
             system: self.recovery.system.clone(),
-            created: self.recovery.created.clone(),
-            omitted: self.recovery.omitted.clone(),
-            // Evidence belongs to the conversion report, never to a candidate
-            // Split part. Copying it here multiplies item-count ownership.
+            created,
+            omitted,
             skipped: Records::default(),
             evidence: CompletenessEvidence {
                 headers_only: Evidence::NotChecked,
                 unreadable: Evidence::NotChecked,
                 external_references: Evidence::NotChecked,
             },
-        };
-        part.omitted.extend(
-            all.iter()
-                .filter(|n| !part.nodes.iter().any(|kept| kept.nid == n.nid))
-                .map(|n| n.nid),
-        );
-        part.created
-            .retain(|id, _| part.nodes.iter().any(|n| n.nid == *id));
-        part
+        })
+    }
+}
+fn node_failure(e: Box<dyn std::error::Error>) -> EngineError {
+    EngineError {
+        kind: ErrorKind::Io,
+        message: format!("Node staging failed: {e}"),
+        completed_files: Default::default(),
     }
 }

@@ -262,7 +262,7 @@ fn own_policy(
     if header.len() != 8 || header[..3] != [0xb5, 2, 6] {
         return Err("Invalid property BTH".into());
     }
-    let subs = source.subnodes(node.bid_sub)?;
+    let subs = crate::nodes::Namespace::new(source, node.bid_sub, cancel)?;
     let mut values = [None; 3];
     struct Walk<'a> {
         source: &'a mut Pst,
@@ -275,7 +275,7 @@ fn own_policy(
         hid: u32,
         level: u8,
         values: &mut [Option<Value>; 3],
-        subs: &std::collections::HashMap<u32, pstoff_format::ndb::Sub>,
+        subs: &crate::nodes::Namespace,
     ) -> Result<()> {
         if level > 32 {
             return Err("Excessive property BTH depth".into());
@@ -315,7 +315,7 @@ fn own_policy(
                 w.blob.put(kind, &heap.item(hnid)?)?
             } else {
                 let at = w.blob.len();
-                let bid = subs.get(&hnid).ok_or("Missing policy subnode")?.data;
+                let bid = subs.get(&hnid)?.ok_or("Missing policy subnode")?.data;
                 for chunk in w.source.node_chunks(bid)? {
                     if w.cancel.is_cancelled() {
                         return Err("Cancelled Item policy read".into());
@@ -349,10 +349,10 @@ fn own_policy(
 
 pub(super) fn prepare(
     source: &mut Pst,
-    nodes: &[Node],
+    nodes: &crate::nodes::Nodes,
     differences: &mut crate::Records<Difference>,
     cancel: &crate::CancelToken,
-    omitted: &std::collections::HashSet<u32>,
+    omitted: &crate::nodes::IdSet,
 ) -> Result<Option<Plan>> {
     let result = prepare_inner(source, nodes, differences, cancel, omitted);
     if cancel.is_cancelled() {
@@ -362,10 +362,10 @@ pub(super) fn prepare(
 }
 fn prepare_inner(
     source: &mut Pst,
-    nodes: &[Node],
+    nodes: &crate::nodes::Nodes,
     differences: &mut crate::Records<Difference>,
     cancel: &crate::CancelToken,
-    omitted: &std::collections::HashSet<u32>,
+    omitted: &crate::nodes::IdSet,
 ) -> Result<Plan> {
     let mut plan = Plan::new()?;
     let mut blob = Blob::new()?;
@@ -374,17 +374,18 @@ fn prepare_inner(
         .iter()
         .filter(|n| n.bid_data != 0 && matches!(n.nid & 31, 0xe..=0x10))
     {
+        let node = node?;
         if cancel.is_cancelled() {
             return Err("Cancelled cache planning".into());
         }
         let mut table = table::policy_read(source, node.bid_data, node.bid_sub, cancel, &mut blob)?;
         table.rows.visit(|(nid, _, cells)| {
-            if omitted.contains(&nid) {
+            if omitted.contains(&nid)? {
                 return Ok(());
             }
             let item = nodes
-                .iter()
-                .find(|n| n.nid == nid && matches!(n.nid & 31, 4 | 8))
+                .by_id(nid)?
+                .filter(|n| matches!(n.nid & 31, 4 | 8))
                 .ok_or("Cache row has no indexed Item")?;
             if node.nid & 31 != 0x10 && node.nid & !31 != item.nid_parent & !31 {
                 return Err("Cache row belongs to another folder".into());
@@ -412,10 +413,11 @@ fn prepare_inner(
         })?;
     }
     for node in nodes.iter().filter(|n| matches!(n.nid & 31, 4 | 8)) {
+        let node = node?;
         if cancel.is_cancelled() {
             return Err("Cancelled cache planning".into());
         }
-        let own = own_policy(source, node, &mut blob, cancel)?;
+        let own = own_policy(source, &node, &mut blob, cancel)?;
         let mut first_time = None;
         let mut first_pair: Option<[Value; 2]> = None;
         let mut count = [0u64; 2];

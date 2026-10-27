@@ -1,6 +1,6 @@
 //! Resolve source folder roles once. Display names are never authoritative IDs.
 use super::{context, recovery::add_folder, Result};
-use pstoff_format::ndb::{Node, Pst};
+use pstoff_format::ndb::Pst;
 use std::collections::BTreeMap;
 
 #[derive(Clone)]
@@ -22,21 +22,13 @@ pub(super) struct SourceFolders {
     finder: Option<u32>,
 }
 
-pub(super) fn resolve(source: &mut Pst, nodes: &[Node]) -> Result<SourceFolders> {
-    let store = nodes
-        .iter()
-        .find(|n| n.nid == 0x21)
-        .ok_or("Missing message store")?;
+pub(super) fn resolve(source: &mut Pst, nodes: &crate::nodes::Nodes) -> Result<SourceFolders> {
+    let store = nodes.by_id(0x21)?.ok_or("Missing message store")?;
     let cells = context::properties(source, store.bid_data, store.bid_sub)?;
     let key = cells
         .get(&0x0ff9)
         .filter(|c| c.kind == 0x102 && c.bytes.len() == 16)
         .ok_or("Invalid store record key")?;
-    let folders: BTreeMap<_, _> = nodes
-        .iter()
-        .filter(|n| matches!(n.nid_type(), 2 | 3))
-        .map(|n| (n.nid, n))
-        .collect();
     let entry = |tag: u16| -> Result<Option<u32>> {
         let Some(cell) = cells.get(&tag) else {
             return Ok(None);
@@ -49,10 +41,15 @@ pub(super) fn resolve(source: &mut Pst, nodes: &[Node]) -> Result<SourceFolders>
             return Err(format!("Invalid source system folder EntryID property 0x{tag:04x}0102; verify local store identity before retrying.").into());
         }
         let nid = u32::from_le_bytes(cell.bytes[20..24].try_into()?);
-        if nid == 0x122 || !folders.contains_key(&nid) || nid & 31 != 2 {
+        if nid == 0x122
+            || !nodes
+                .by_id(nid)?
+                .is_some_and(|n| matches!(n.nid_type(), 2 | 3))
+            || nid & 31 != 2
+        {
             return Err(format!("Source system folder property 0x{tag:04x}0102 references no normal folder; verify the source hierarchy before retrying.").into());
         }
-        if !descendant(&folders, nid, 0x122) {
+        if !descendant(nodes, nid, 0x122)? {
             return Err("Source system folder is outside the root hierarchy".into());
         }
         Ok(Some(nid))
@@ -60,11 +57,21 @@ pub(super) fn resolve(source: &mut Pst, nodes: &[Node]) -> Result<SourceFolders>
     let subtree = entry(0x35e0)?;
     let deleted = entry(0x35e3)?;
     let finder = entry(0x35e7)?;
-    let mailbox = subtree.map(|id| folders[&id].nid_parent);
+    let mailbox = if let Some(id) = subtree {
+        Some(nodes.by_id(id)?.ok_or("Missing subtree")?.nid_parent)
+    } else {
+        None
+    };
     if let Some(subtree) = subtree {
-        if deleted.is_some_and(|id| !descendant(&folders, id, subtree))
-            || finder.is_some_and(|id| id == subtree || descendant(&folders, id, subtree))
-        {
+        if (if let Some(id) = deleted {
+            !descendant(nodes, id, subtree)?
+        } else {
+            false
+        }) || (if let Some(id) = finder {
+            id == subtree || descendant(nodes, id, subtree)?
+        } else {
+            false
+        }) {
             return Err("Conflicting source system folder roles".into());
         }
     } else if deleted.is_some() {
@@ -78,27 +85,27 @@ pub(super) fn resolve(source: &mut Pst, nodes: &[Node]) -> Result<SourceFolders>
     })
 }
 
-fn descendant(folders: &BTreeMap<u32, &Node>, mut id: u32, parent: u32) -> bool {
-    for _ in 0..folders.len() {
-        let Some(node) = folders.get(&id) else {
-            return false;
+fn descendant(nodes: &crate::nodes::Nodes, mut id: u32, parent: u32) -> Result<bool> {
+    for _ in 0..nodes.len() {
+        let Some(node) = nodes.by_id(id)?.filter(|n| matches!(n.nid_type(), 2 | 3)) else {
+            return Ok(false);
         };
         if node.nid_parent == parent && id != parent {
-            return true;
+            return Ok(true);
         }
         if node.nid_parent == id {
-            return false;
+            return Ok(false);
         }
         id = node.nid_parent;
     }
-    false
+    Ok(false)
 }
 
 // Only absent/unreadable source roles receive empty output scaffolding. The
 // original role IDs were resolved before recovery removed unreadable subtrees.
 pub(super) fn repair(
     identity: SourceFolders,
-    nodes: &mut Vec<Node>,
+    nodes: &mut crate::nodes::Nodes,
     highwater: u32,
 ) -> Result<(SystemFolders, BTreeMap<u32, String>)> {
     // Missing role metadata is not proof of a missing source folder. Only
@@ -106,39 +113,49 @@ pub(super) fn repair(
     if identity.subtree.is_none()
         && nodes.iter().any(|n| {
             (matches!(n.nid_type(), 2 | 3) && n.nid != 0x122) || matches!(n.nid_type(), 4 | 8)
-        })
+        })?
     {
         return Err("Cannot identify the source IPM subtree; valid local 0x35e00102 metadata is required. Verify the source store before retrying. No replacement hierarchy was created.".into());
     }
     if identity.deleted.is_none()
-        && identity.subtree.is_some_and(|parent| {
-            nodes
-                .iter()
-                .any(|n| matches!(n.nid_type(), 2 | 3) && n.nid_parent == parent && n.nid != parent)
-        })
+        && if let Some(parent) = identity.subtree {
+            nodes.iter().any(|n| {
+                matches!(n.nid_type(), 2 | 3) && n.nid_parent == parent && n.nid != parent
+            })?
+        } else {
+            false
+        }
     {
         return Err("Cannot identify the source wastebasket among readable folders; valid local 0x35e30102 metadata is required. Verify the source store before retrying. No replacement folder was created.".into());
     }
     if identity.finder.is_none()
-        && identity.mailbox.is_some_and(|parent| {
+        && if let Some(parent) = identity.mailbox {
             nodes.iter().any(|n| {
                 matches!(n.nid_type(), 2 | 3)
                     && n.nid_parent == parent
                     && n.nid != parent
                     && Some(n.nid) != identity.subtree
-            })
-        })
+            })?
+        } else {
+            false
+        }
     {
         return Err("Cannot identify the source Finder among readable folders; valid local 0x35e70102 metadata is required. Verify the source store before retrying. No replacement folder was created.".into());
     }
-    let retained = |id: Option<u32>| id.filter(|id| nodes.iter().any(|n| n.nid == *id));
-    let mailbox = retained(identity.mailbox);
-    let subtree = retained(identity.subtree);
-    let deleted = retained(identity.deleted);
-    let finder = retained(identity.finder);
+    let retained = |id: Option<u32>| -> Result<Option<u32>> {
+        if let Some(id) = id {
+            Ok(nodes.by_id(id)?.map(|n| n.nid))
+        } else {
+            Ok(None)
+        }
+    };
+    let mailbox = retained(identity.mailbox)?;
+    let subtree = retained(identity.subtree)?;
+    let deleted = retained(identity.deleted)?;
+    let finder = retained(identity.finder)?;
     let mut created = BTreeMap::new();
-    if !nodes.iter().any(|n| n.nid == 0x122) {
-        add_folder(nodes, &mut created, 0x122, 0x122, "Root");
+    if nodes.by_id(0x122)?.is_none() {
+        add_folder(nodes, &mut created, 0x122, 0x122, "Root")?;
     }
     let mut next = highwater.checked_add(32).ok_or("Folder ID overflow")?;
     let mut ensure = |id: Option<u32>, parent: u32, name: &str| -> Result<u32> {
@@ -147,7 +164,7 @@ pub(super) fn repair(
         }
         let id = next | 2;
         next = next.checked_add(32).ok_or("Folder ID overflow")?;
-        add_folder(nodes, &mut created, id, parent, name);
+        add_folder(nodes, &mut created, id, parent, name)?;
         Ok(id)
     };
     let mailbox = ensure(mailbox, 0x122, "Root - Mailbox")?;

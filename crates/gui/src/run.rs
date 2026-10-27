@@ -180,7 +180,7 @@ impl Run {
                         error: pstoff_engine::EngineError {
                             kind: ErrorKind::Io,
                             message: "The conversion stopped unexpectedly.".into(),
-                            completed_files: vec![],
+                            completed_files: Default::default(),
                         },
                     },
                 }

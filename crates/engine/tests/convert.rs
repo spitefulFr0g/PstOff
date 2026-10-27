@@ -1121,7 +1121,8 @@ fn oversized_item_and_cancel_keep_finished_parts_and_clean_unfinished_output() {
     assert!(error.message.contains(&format!("Item 0x{:x}", item.node)));
     assert!(error.message.contains("Increase the Split limit"));
     assert_eq!(error.completed_files.len(), 2);
-    for file in &error.completed_files {
+    for file in error.completed_files.iter() {
+        let file = file.unwrap();
         assert!(file.bytes <= limit);
         outlook_pst::open_store(&file.path).unwrap();
     }
@@ -1149,7 +1150,13 @@ fn oversized_item_and_cancel_keep_finished_parts_and_clean_unfinished_output() {
         panic!("expected cancellation")
     };
     assert_eq!(completed_files.len(), 1);
-    assert!(completed_files[0].path.exists());
+    assert!(completed_files
+        .iter()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path
+        .exists());
     assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 1);
     assert_source_hash(&f, &hash);
 }
@@ -1312,7 +1319,7 @@ fn later_split_name_collision_preserves_finished_parts_and_existing_file() {
     assert!(matches!(error.kind, pstoff_engine::ErrorKind::Collision));
     assert_eq!(error.completed_files.len(), 1);
     assert_eq!(std::fs::read(&held).unwrap(), b"existing output");
-    outlook_pst::open_store(&error.completed_files[0].path).unwrap();
+    outlook_pst::open_store(&error.completed_files.iter().next().unwrap().unwrap().path).unwrap();
     assert_eq!(std::fs::read_dir(destination).unwrap().count(), 2);
     assert_source_hash(&f, &hash);
 }
@@ -1827,4 +1834,88 @@ fn arbitrary_store_payload_survives_bounded_store_preparation() {
         panic!("missing synthetic store payload")
     };
     assert!(value.buffer() == payload, "Synthetic store payload differs");
+}
+
+#[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
+fn progress_finishes_monotonically_and_all_cancellation_boundaries_clean_output() {
+    for boundary in [0, 1, 2, 3, 4] {
+        let f = support::Fixture::invalid();
+        let bytes = source_items((0..3).map(|_| Item::new("IPM.Note", 10)).collect());
+        std::fs::write(&f.source, &bytes).unwrap();
+        let options = unsplit_options(f.root.join("out"), "progress".into());
+        let cancel = CancelToken::default();
+        if boundary == 0 {
+            cancel.cancel();
+        }
+        let mut fraction = 0.0;
+        let mut done = 0;
+        let mut events = 0;
+        let result = convert(
+            &f.source,
+            &options,
+            &mut |p: pstoff_engine::Progress| {
+                assert!(p.fraction >= fraction && p.fraction <= 1.0);
+                assert!(p.done >= done && p.done <= p.total);
+                fraction = p.fraction;
+                done = p.done;
+                events += 1;
+                if (boundary == 1 && p.done == 1)
+                    || (boundary == 2 && p.done == p.total && p.fraction < 0.95)
+                    || (boundary == 3 && p.fraction == 0.95)
+                {
+                    cancel.cancel();
+                }
+            },
+            &cancel,
+        )
+        .unwrap();
+        if boundary == 4 {
+            assert!(matches!(result, Conversion::Complete(_)));
+            assert_eq!(fraction, 1.0);
+            assert_eq!(done, 3);
+        } else {
+            assert!(
+                matches!(result, Conversion::Cancelled { completed_files } if completed_files.is_empty())
+            );
+            assert!(fraction < 1.0);
+            if options.destination.exists() {
+                assert_eq!(std::fs::read_dir(&options.destination).unwrap().count(), 0);
+            }
+            if boundary == 0 {
+                assert_eq!(events, 0);
+            }
+        }
+        assert_eq!(std::fs::read(&f.source).unwrap(), bytes);
+    }
+}
+
+#[test]
+#[cfg_attr(not(windows), ignore = "requires Windows disk preflight")]
+fn split_trial_progress_never_rewinds_and_ends_at_one() {
+    let (f, folders, hash) = split_fixture();
+    let mut options = ConvertOptions::new(f.root.join("progress-parts"), "progress".into());
+    options.split = pstoff_engine::Split::Bytes(80_000);
+    options.exclusions = vec![folders[2].clone()];
+    let mut fraction = 0.0;
+    let mut done = 0;
+    let mut last_part = 0;
+    let result = convert(
+        &f.source,
+        &options,
+        &mut |p: pstoff_engine::Progress| {
+            assert!(p.fraction >= fraction && p.fraction <= 1.0);
+            assert!(p.done >= done && p.done <= p.total);
+            assert!(p.part >= last_part);
+            fraction = p.fraction;
+            done = p.done;
+            last_part = p.part;
+        },
+        &CancelToken::default(),
+    )
+    .unwrap();
+    assert!(matches!(result, Conversion::Complete(_)));
+    assert_eq!(fraction, 1.0);
+    assert_eq!(done, 2);
+    assert_source_hash(&f, &hash);
 }

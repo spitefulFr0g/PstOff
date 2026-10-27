@@ -8,7 +8,7 @@ use super::{
     table_storage::{Blocks, Heap, Rows},
 };
 use crate::{Difference, FolderRef, ItemRef};
-use pstoff_format::ndb::{Node, Pst};
+use pstoff_format::ndb::Pst;
 use std::collections::{BTreeMap, BTreeSet};
 fn u16at(b: &[u8], at: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(
@@ -51,13 +51,13 @@ pub(super) fn inspect(source: &mut Pst, bid: u64, sub: u64) -> Result<()> {
         return Err("Invalid table width".into());
     }
     let matrix = u32at(&info, 14)?;
-    let subs = source.subnodes(sub)?;
+    let subs = crate::nodes::Namespace::new(source, sub, &crate::CancelToken::default())?;
     let mut rows = Blocks::new()?;
     if matrix != 0 {
         if matrix & 31 == 0 {
             rows.push(&heap.item(matrix)?)?;
         } else {
-            let bid = subs.get(&matrix).ok_or("Missing table matrix")?.data;
+            let bid = subs.get(&matrix)?.ok_or("Missing table matrix")?.data;
             for chunk in source.node_chunks(bid)? {
                 rows.push(&chunk?)?;
             }
@@ -92,7 +92,7 @@ pub(super) fn inspect(source: &mut Pst, bid: u64, sub: u64) -> Result<()> {
                     let hnid = u32at(row, at)?;
                     if hnid & 31 == 0 {
                         heap.item(hnid)?;
-                    } else if let Some(node) = subs.get(&hnid) {
+                    } else if let Some(node) = subs.get(&hnid)? {
                         for chunk in source.node_chunks(node.data)? {
                             chunk?;
                         }
@@ -274,13 +274,13 @@ fn read_inner_mode(
     }
     let matrix = u32at(&info, 14)?;
     structural.insert(matrix, 0)?;
-    let subs = source.subnodes(sub)?;
+    let subs = crate::nodes::Namespace::new(source, sub, cancel)?;
     let mut matrix_blocks = Blocks::new()?;
     if matrix != 0 {
         if matrix & 31 == 0 {
             matrix_blocks.push(&heap.item(matrix)?)?;
         } else {
-            let bid = subs.get(&matrix).ok_or("Missing table payload")?.data;
+            let bid = subs.get(&matrix)?.ok_or("Missing table payload")?.data;
             for chunk in source.node_chunks(bid)? {
                 if cancel.is_cancelled() {
                     return Err("Cancelled table read".into());
@@ -320,7 +320,7 @@ fn read_inner_mode(
                         if hnid & 31 == 0 {
                             heap.item(hnid)?;
                         } else {
-                            let bid = subs.get(&hnid).ok_or("Missing table payload")?.data;
+                            let bid = subs.get(&hnid)?.ok_or("Missing table payload")?.data;
                             for chunk in source.node_chunks(bid)? {
                                 if cancel.is_cancelled() {
                                     return Err("Cancelled table read".into());
@@ -343,7 +343,7 @@ fn read_inner_mode(
                     } else {
                         // Emission owns the current cell; planning copies chunks
                         // to disk. Neither retains a decoded block collection.
-                        let bid = subs.get(&hnid).ok_or("Missing table payload")?.data;
+                        let bid = subs.get(&hnid)?.ok_or("Missing table payload")?.data;
                         let start = blob.as_ref().map(|b| b.len());
                         let mut bytes = Vec::new();
                         for chunk in source.node_chunks(bid)? {
@@ -416,14 +416,12 @@ impl Table {
     pub fn rebuild_contents(
         &mut self,
         mut properties: impl FnMut(u32) -> Result<Properties>,
-        nodes: &[Node],
+        nodes: &crate::nodes::Nodes,
         nid: u32,
         differences: &mut crate::Records<Difference>,
     ) -> Result<()> {
         self.rows.rewrite(|(row, _, cells)| {
-            let node = nodes
-                .iter()
-                .find(|n| n.nid == *row)
+            let node = nodes.by_id(*row)?
                 .ok_or("Contents row has no Item")?;
             let own = properties(*row)?;
             for (tag, _) in &self.columns {

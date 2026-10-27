@@ -133,7 +133,11 @@ fn visit_properties(
     if header.len() != 8 || header[..3] != [0xb5, 2, 6] {
         return Err("Invalid property BTH".into());
     }
-    let subs = source.subnodes(sub)?;
+    let subs = crate::nodes::Namespace::new(
+        source,
+        sub,
+        cancel.unwrap_or(&crate::CancelToken::default()),
+    )?;
     let mut previous = None;
     fn walk(
         heap: &mut Heap,
@@ -184,7 +188,9 @@ fn visit_properties(
             } else if value & 31 == 0 {
                 heap.item(value)?
             } else {
-                let node = subs.get(&value).ok_or("Missing property payload subnode")?;
+                let node = subs
+                    .get(&value)?
+                    .ok_or("Missing property payload subnode")?;
                 let mut bytes = Vec::new();
                 for chunk in source.node_chunks(node.data)? {
                     if cancel.is_some_and(crate::CancelToken::is_cancelled) {

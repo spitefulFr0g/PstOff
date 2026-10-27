@@ -1,18 +1,22 @@
 use super::*;
 use std::collections::BTreeMap;
 
-pub(super) fn output(path: &Path) -> Output<'static> {
+pub(super) fn output<'a>(
+    path: &Path,
+    nodes: &'a crate::nodes::Nodes,
+    omitted: &'a crate::nodes::IdSet,
+) -> Output<'a> {
     Output {
         cancel: Default::default(),
         file: File::create(path).unwrap(),
         pos: AMAP + 2048,
         next: 1,
         blocks: spool::Spool::new().unwrap(),
-        nodes: &[],
+        nodes,
         differences: crate::Records::default(),
         highwater: 1024,
         planned: cache::Plan::new().unwrap(),
-        omitted: Default::default(),
+        omitted,
         created: Default::default(),
     }
 }
@@ -20,14 +24,21 @@ pub(super) fn output(path: &Path) -> Output<'static> {
 // File-backed generated table fixture: one NBT entry, arbitrarily many rows and
 // multilevel BBT/BTH indexes. No whole-fixture byte vector or source mail.
 fn emit(path: &Path, table: &mut table::Table) {
-    let mut out = output(path);
+    let nodes = crate::nodes::Nodes::new().unwrap();
+    let omitted = crate::nodes::IdSet::default();
+    let mut out = output(path, &nodes, &omitted);
     let mut heap = context::HeapBuilder::new(0x7c).unwrap();
-    let mut subs = vec![];
+    let mut subs = crate::nodes::Nodes::new().unwrap();
     let root = table
         .build(&mut heap, |chunks| {
             let nid = ((subs.len() as u32 + 1) << 5) | 0x1f;
             let bid = out.stream_chunks(chunks, true)?;
-            subs.push((nid, bid, 0));
+            subs.push(Node {
+                nid,
+                bid_data: bid,
+                bid_sub: 0,
+                nid_parent: 0,
+            })?;
             Ok(nid)
         })
         .unwrap();
@@ -245,12 +256,18 @@ fn q16_preserves_versions_and_exact_types_through_row_spool() {
     table
         .rebuild_contents(
             |item| Ok(planned.get(&item).unwrap().clone()),
-            &[pstoff_format::ndb::Node {
-                nid: 0x104,
-                nid_parent: 0x122,
-                bid_data: 0,
-                bid_sub: 0,
-            }],
+            &{
+                let mut nodes = crate::nodes::Nodes::new().unwrap();
+                nodes
+                    .push(pstoff_format::ndb::Node {
+                        nid: 0x104,
+                        nid_parent: 0x122,
+                        bid_data: 0,
+                        bid_sub: 0,
+                    })
+                    .unwrap();
+                nodes
+            },
             0x12e,
             &mut differences,
         )
@@ -334,7 +351,9 @@ fn planner_source(
     pcl_entries: u32,
     conflict: Option<u32>,
 ) {
-    let mut out = output(path);
+    let nodes = crate::nodes::Nodes::new().unwrap();
+    let omitted = crate::nodes::IdSet::default();
+    let mut out = output(path, &nodes, &omitted);
     let mut entries = vec![];
     let mut add = |nid: u32, data: u64, sub: u64| {
         let mut entry = vec![0; 32];
@@ -401,12 +420,17 @@ fn planner_source(
             })
             .unwrap();
         let mut heap = context::HeapBuilder::new(0x7c).unwrap();
-        let mut subs = vec![];
+        let mut subs = crate::nodes::Nodes::new().unwrap();
         let root = table
             .build(&mut heap, |chunks| {
                 let nid = ((subs.len() as u32 + 1) << 5) | 0x1f;
                 let bid = out.stream_chunks(chunks, true)?;
-                subs.push((nid, bid, 0));
+                subs.push(Node {
+                    nid,
+                    bid_data: bid,
+                    bid_sub: 0,
+                    nid_parent: 0,
+                })?;
                 Ok(nid)
             })
             .unwrap();
@@ -430,7 +454,10 @@ fn planner_streams_large_pcl_occurrences_and_rejects_last_occurrence_conflict() 
         planner_source(&fixture.source, 2, 3, 90_000, conflict);
         let before = Sha256::digest(std::fs::read(&fixture.source).unwrap());
         let mut source = Pst::from_file(File::open(&fixture.source).unwrap()).unwrap();
-        let nodes = source.nodes();
+        let mut nodes = crate::nodes::Nodes::new().unwrap();
+        source
+            .visit_nodes::<Box<dyn std::error::Error>>(|n| nodes.push(n))
+            .unwrap();
         let mut differences = crate::Records::default();
         let (result, peak) = allocations::measure(|| {
             cache::prepare(
@@ -458,6 +485,7 @@ fn planner_streams_large_pcl_occurrences_and_rejects_last_occurrence_conflict() 
             // Decisions reproduce the complete PCL; no source-local reference
             // is carried into another namespace.
             for node in nodes.iter().filter(|n| n.nid_type() == 4) {
+                let node = node.unwrap();
                 let mut cells = BTreeMap::new();
                 plan.apply(node.nid, &mut cells).unwrap();
                 assert_eq!(cells[&0x65e3].bytes.len(), 2_250_000);
@@ -487,7 +515,10 @@ fn planner_checks_all_search_occurrences_with_growing_item_counts() {
     for items in [16, 128, 1024] {
         planner_source(&fixture.source, items, 32, 1, None);
         let mut source = Pst::from_file(File::open(&fixture.source).unwrap()).unwrap();
-        let nodes = source.nodes();
+        let mut nodes = crate::nodes::Nodes::new().unwrap();
+        source
+            .visit_nodes::<Box<dyn std::error::Error>>(|n| nodes.push(n))
+            .unwrap();
         let mut differences = crate::Records::default();
         let (result, peak) = allocations::measure(|| {
             cache::prepare(
@@ -506,10 +537,57 @@ fn planner_checks_all_search_occurrences_with_growing_item_counts() {
         );
         assert_eq!(differences.len(), items as usize * 3);
         for node in nodes.iter().filter(|n| n.nid_type() == 4) {
+            let node = node.unwrap();
             let mut cells = BTreeMap::new();
             plan.apply(node.nid, &mut cells).unwrap();
             assert_eq!(cells[&0x65e3].bytes.len(), 25);
             assert_eq!(cells[&0x3008].bytes, 42u64.to_le_bytes());
         }
     }
+}
+
+#[test]
+fn high_fanout_namespaces_are_spooled_with_exact_local_identity_and_bounded_allocation() {
+    use sha2::{Digest, Sha256};
+    let fixture = support::Fixture::invalid();
+    let path = fixture.root.join("namespace.pst");
+    let empty = crate::nodes::Nodes::new().unwrap();
+    let omitted = crate::nodes::IdSet::default();
+    let mut out = output(&path, &empty, &omitted);
+    let mut entries = crate::nodes::Nodes::new().unwrap();
+    for i in 0..25_000u32 {
+        entries
+            .push(Node {
+                nid: ((i + 1) * 32) | 0x1f,
+                nid_parent: 0,
+                bid_data: u64::from(i) * 4,
+                bid_sub: u64::from(i) * 8,
+            })
+            .unwrap();
+    }
+    let (root, peak) = allocations::measure(|| out.subentries(&entries).unwrap());
+    assert!(peak < 128 * 1024, "subentry ownership {peak}");
+    let mut entry = vec![0; 32];
+    p64(&mut entry, 0, 0x104);
+    p64(&mut entry, 16, root);
+    finish(out, vec![(0x104, entry)]);
+    let before = Sha256::digest(std::fs::read(&path).unwrap());
+    let mut source = Pst::from_file(File::open(&path).unwrap()).unwrap();
+    let (inventory, peak) = allocations::measure(|| {
+        crate::nodes::Nodes::namespace(&mut source, root, &Default::default()).unwrap()
+    });
+    assert!(peak < 256 * 1024, "namespace ownership {peak}");
+    assert_eq!(inventory.len(), 25_000);
+    for (i, n) in inventory.iter().enumerate() {
+        let n = n.unwrap();
+        assert_eq!(n.nid, ((i as u32 + 1) * 32) | 0x1f);
+        assert_eq!((n.bid_data, n.bid_sub), (i as u64 * 4, i as u64 * 8));
+    }
+    let legacy = source.subnodes(root).unwrap();
+    for n in &inventory {
+        let n = n.unwrap();
+        let expected = legacy[&n.nid];
+        assert_eq!((n.bid_data, n.bid_sub), (expected.data, expected.sub));
+    }
+    assert_eq!(before, Sha256::digest(std::fs::read(&path).unwrap()));
 }

@@ -56,8 +56,10 @@ fn disk_index_pages_match_original_writer_byte_for_byte() {
     for width in [24, 32] {
         let a = fixture.root.join("spooled.bin");
         let b = fixture.root.join("original.bin");
-        let mut bounded = tables::output(&a);
-        let mut original = tables::output(&b);
+        let nodes = crate::nodes::Nodes::new().unwrap();
+        let omitted = crate::nodes::IdSet::default();
+        let mut bounded = tables::output(&a, &nodes, &omitted);
+        let mut original = tables::output(&b, &nodes, &omitted);
         let mut records = spool::Spool::new().unwrap();
         let mut legacy = vec![];
         for key in 1..4096u64 {

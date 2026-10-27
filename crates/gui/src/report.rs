@@ -141,7 +141,10 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
                         "Stopped before this PST was finished. The unfinished PST was removed so it can’t be mistaken for a full copy."
                             .into(),
                     );
-                    out.files = file_rows(completed_files);
+                    out.files = file_rows(completed_files).unwrap_or_else(|_| {
+                        out.message = Some("Could not read finished-part records; inspect the destination folder.".into());
+                        Vec::new()
+                    });
                     out.file_count = completed_files.len();
                 }
                 JobState::Done(BatchResult::Failed { error, .. }) => {
@@ -159,7 +162,10 @@ pub fn build(wizard: &Wizard) -> Vec<OstReport> {
                         _ => String::new(),
                     };
                     out.message = Some(format!("{}{hint}", error.message));
-                    out.files = file_rows(&error.completed_files);
+                    out.files = file_rows(&error.completed_files).unwrap_or_else(|_| {
+                        out.message = Some(format!("{} Finished-part records could not be read; inspect the destination folder.", error.message));
+                        Vec::new()
+                    });
                     out.file_count = error.completed_files.len();
                 }
                 JobState::Done(BatchResult::NotStarted { .. }) => {
@@ -329,14 +335,17 @@ pub fn item_label(tree: &[Folder], item: &ItemRef) -> String {
     )
 }
 
-fn file_rows(files: &[OutputFile]) -> Vec<FileRow> {
+fn file_rows(files: &pstoff_engine::Records<OutputFile>) -> std::io::Result<Vec<FileRow>> {
     files
         .iter()
         .take(SHOWN)
-        .map(|f| FileRow {
-            path: f.path.clone(),
-            size: format::bytes(f.bytes),
-            part: f.part,
+        .map(|f| {
+            let f = f?;
+            Ok(FileRow {
+                path: f.path,
+                size: format::bytes(f.bytes),
+                part: f.part,
+            })
         })
         .collect()
 }

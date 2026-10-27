@@ -69,6 +69,7 @@ fn console_driver() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let cli_pid = child.id();
     let stderr = child.stderr.take().unwrap();
     let staging = f.out.join(".synthetic.pstoff-partial");
     let reader = std::thread::spawn(move || {
@@ -97,4 +98,13 @@ fn console_driver() {
         "{log}"
     );
     assert_eq!(std::fs::read_dir(&f.out).unwrap().count(), 0);
+    let prefix = format!("pstoff-table-{cli_pid}-");
+    assert!(
+        !std::fs::read_dir(std::env::temp_dir()).unwrap().any(|p| p
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&prefix)),
+        "CLI cancellation retained a staging spool"
+    );
 }

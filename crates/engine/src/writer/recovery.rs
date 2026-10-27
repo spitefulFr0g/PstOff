@@ -1,17 +1,18 @@
 //! Validate source contexts before emitting anything. Output I/O errors remain fatal.
 use super::{context, system, table, Result};
+use crate::nodes::IdSet;
 use crate::*;
 use pstoff_format::{
     ltp,
     ndb::{Node, Pst},
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 pub(crate) struct Recovery {
-    pub nodes: Vec<Node>,
+    pub nodes: crate::nodes::Nodes,
     pub system: system::SystemFolders,
     pub created: BTreeMap<u32, String>,
-    pub omitted: HashSet<u32>,
+    pub omitted: IdSet,
     pub skipped: Records<Skipped>,
     pub evidence: CompletenessEvidence<Records<ItemRef>>,
 }
@@ -59,7 +60,13 @@ fn validate(
         }
         chunk?;
     }
-    for (id, child) in source.subnodes(sub)? {
+    for n in crate::nodes::Nodes::namespace(source, sub, cancel)?.iter() {
+        let n = n?;
+        let id = n.nid;
+        let child = pstoff_format::ndb::Sub {
+            data: n.bid_data,
+            sub: n.bid_sub,
+        };
         let kind = match id & 31 {
             4 | 5 => Some(0xbc),
             0x11 | 0x12 => Some(0x7c),
@@ -100,11 +107,18 @@ fn readable<T>(result: Result<T>) -> Result<bool> {
 }
 pub(crate) fn prepare(
     source: &mut Pst,
-    mut nodes: Vec<Node>,
+    mut nodes: crate::nodes::Nodes,
     cancel: &CancelToken,
 ) -> Result<Recovery> {
     let identity = system::resolve(source, &nodes)?;
-    let names = ltp::read_named_properties(source, &nodes)?;
+    let names = ltp::read_named_properties(
+        source,
+        &nodes
+            .iter()
+            .find(|n| n.nid == ltp::NID_NAME_TO_ID_MAP)?
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )?;
     let header_ids: Vec<_> = names
         .iter()
         .filter(|(_, p)| {
@@ -113,10 +127,11 @@ pub(crate) fn prepare(
         })
         .map(|(&id, _)| id)
         .collect();
-    let mut omitted = HashSet::new();
-    let mut bad_folders = HashSet::new();
+    let mut omitted = IdSet::default();
+    let mut bad_folders = IdSet::default();
     let mut skipped = Records::default();
     for folder in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
+        let folder = folder?;
         if cancel.is_cancelled() {
             break;
         }
@@ -132,6 +147,7 @@ pub(crate) fn prepare(
             .iter()
             .filter(|n| matches!(n.nid_type(), 0xd..=0xf) && n.nid & !31 == folder.nid & !31)
         {
+            let n = n?;
             bad |= !readable(validate(
                 source,
                 n.bid_data,
@@ -142,16 +158,17 @@ pub(crate) fn prepare(
             ))?;
         }
         if bad {
-            bad_folders.insert(folder.nid);
+            bad_folders.insert(folder.nid)?;
         }
     }
     // Propagate unreadable folder boundaries iteratively; inspection rejects cycles.
-    let mut lost = bad_folders.clone();
+    let mut lost = bad_folders.copy(cancel)?;
     loop {
         let old = lost.len();
         for n in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
-            if n.nid != n.nid_parent && lost.contains(&n.nid_parent) {
-                lost.insert(n.nid);
+            let n = n?;
+            if n.nid != n.nid_parent && lost.contains(&n.nid_parent)? {
+                lost.insert(n.nid)?;
             }
         }
         if old == lost.len() {
@@ -159,11 +176,12 @@ pub(crate) fn prepare(
         }
     }
     for n in &nodes {
-        if lost.contains(&n.nid) && matches!(n.nid_type(), 2 | 3) {
-            omitted.insert(n.nid);
+        let n = n?;
+        if lost.contains(&n.nid)? && matches!(n.nid_type(), 2 | 3) {
+            omitted.insert(n.nid)?;
             skipped.push(Skipped {
                 reference: LocalRef::Folder(FolderRef(n.nid)),
-                code: if bad_folders.contains(&n.nid) {
+                code: if bad_folders.contains(&n.nid)? {
                     SkipReason::UnreadableFolder
                 } else {
                     SkipReason::UnreadableAncestor
@@ -171,8 +189,8 @@ pub(crate) fn prepare(
                 reason: "Folder or ancestor context could not be read; subtree skipped.".into(),
             })?;
         }
-        if matches!(n.nid_type(), 0xd..=0xf) && lost.iter().any(|id| id & !31 == n.nid & !31) {
-            omitted.insert(n.nid);
+        if matches!(n.nid_type(), 0xd..=0xf) && lost.contains_group(n.nid)? {
+            omitted.insert(n.nid)?;
         }
     }
     let mut headers = Records::default();
@@ -182,13 +200,14 @@ pub(crate) fn prepare(
     let mut header_unchecked = Records::default();
     let mut external_unchecked = Records::default();
     for n in nodes.iter().filter(|n| matches!(n.nid_type(), 4 | 8)) {
+        let n = n?;
         if cancel.is_cancelled() {
             break;
         }
-        let item = reference(n);
-        let ancestor = lost.contains(&n.nid_parent);
+        let item = reference(&n);
+        let ancestor = lost.contains(&n.nid_parent)?;
         if ancestor
-            || !readable(crate::reader::item_properties(source, n))?
+            || !readable(crate::reader::item_properties(source, &n))?
             || !readable(validate(
                 source,
                 n.bid_data,
@@ -198,7 +217,7 @@ pub(crate) fn prepare(
                 cancel,
             ))?
         {
-            omitted.insert(n.nid);
+            omitted.insert(n.nid)?;
             unreadable.push(item.clone())?;
             unchecked.push(item.clone())?;
             skipped.push(Skipped {
@@ -237,15 +256,21 @@ pub(crate) fn prepare(
         }
         // Walk nested Items as well. A reference is evidence of a reference,
         // never proof of missing content or of reachability (conversion is offline).
-        let mut pending = vec![(n.bid_sub, 0)];
+        let mut pending = crate::nodes::Pending::new(n.bid_sub)?;
         let mut has_external = false;
         let mut unknown_external = false;
-        while let Some((bid, depth)) = pending.pop() {
+        while let Some((bid, depth)) = pending.pop()? {
             if depth > 32 {
                 unknown_external = true;
                 break;
             }
-            for (id, child) in source.subnodes(bid)? {
+            for n in crate::nodes::Nodes::namespace(source, bid, cancel)?.iter() {
+                let n = n?;
+                let id = n.nid;
+                let child = pstoff_format::ndb::Sub {
+                    data: n.bid_data,
+                    sub: n.bid_sub,
+                };
                 if id & 31 == 5 {
                     let pc = context::evidence_properties(
                         source,
@@ -269,7 +294,7 @@ pub(crate) fn prepare(
                         _ => unknown_external = true,
                     }
                 }
-                pending.push((child.sub, depth + 1));
+                pending.push(child.sub, depth + 1)?;
             }
         }
         if has_external {
@@ -281,8 +306,8 @@ pub(crate) fn prepare(
     }
     header_unchecked.append_cancellable(&unchecked, cancel)?;
     external_unchecked.append_cancellable(&unchecked, cancel)?;
-    let highwater = nodes.iter().map(|n| n.nid & !31).max().unwrap_or(0x120);
-    nodes.retain(|n| !omitted.contains(&n.nid));
+    let highwater = nodes.iter().max_key(|n| n.nid & !31)?.unwrap_or(0x120);
+    nodes.retain(|n| Ok(!omitted.contains(&n.nid)?), cancel)?;
     let (system, created) = system::repair(identity, &mut nodes, highwater)?;
     Ok(Recovery {
         nodes,
@@ -321,25 +346,26 @@ fn valid_target(s: &str, web: bool) -> bool {
 }
 
 pub(super) fn add_folder(
-    nodes: &mut Vec<Node>,
+    nodes: &mut crate::nodes::Nodes,
     created: &mut BTreeMap<u32, String>,
     id: u32,
     parent: u32,
     name: &str,
-) {
+) -> Result<()> {
     nodes.push(Node {
         nid: id,
         nid_parent: parent,
         bid_data: 0,
         bid_sub: 0,
-    });
+    })?;
     for kind in [0xd, 0xe, 0xf] {
         nodes.push(Node {
             nid: (id & !31) | kind,
             nid_parent: 0,
             bid_data: 0,
             bid_sub: 0,
-        });
+        })?;
     }
     created.insert(id, name.into());
+    Ok(())
 }

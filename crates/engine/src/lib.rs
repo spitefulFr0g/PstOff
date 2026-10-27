@@ -1,5 +1,6 @@
 //! Platform-neutral public seam shared by both frontends.
 //! Format readers, writers and conversion policy are private implementation details.
+mod nodes;
 mod planner;
 mod report;
 pub use report::{Records, StreamedReport};
@@ -218,7 +219,8 @@ pub enum ErrorKind {
 pub struct EngineError {
     pub kind: ErrorKind,
     pub message: String,
-    pub completed_files: Vec<OutputFile>,
+    /// Finished Split parts, streamed with fallible `iter()`; clones share a snapshot.
+    pub completed_files: Records<OutputFile>,
 }
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -229,7 +231,9 @@ impl std::error::Error for EngineError {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Conversion {
     Complete(Box<StreamedReport>),
-    Cancelled { completed_files: Vec<OutputFile> },
+    Cancelled {
+        completed_files: Records<OutputFile>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BatchResult {

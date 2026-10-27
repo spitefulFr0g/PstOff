@@ -5,7 +5,7 @@ fn failure(kind: ErrorKind, message: impl Into<String>) -> EngineError {
     EngineError {
         kind,
         message: message.into(),
-        completed_files: vec![],
+        completed_files: Default::default(),
     }
 }
 
@@ -15,12 +15,26 @@ pub(super) fn convert(
     progress: &mut dyn ProgressSink,
     cancel: &CancelToken,
 ) -> Result<Conversion, EngineError> {
+    match convert_inner(path, options, progress, cancel) {
+        Err(error) if cancel.is_cancelled() => Ok(Conversion::Cancelled {
+            completed_files: error.completed_files,
+        }),
+        result => result,
+    }
+}
+
+fn convert_inner(
+    path: &Path,
+    options: &ConvertOptions,
+    progress: &mut dyn ProgressSink,
+    cancel: &CancelToken,
+) -> Result<Conversion, EngineError> {
     if cancel.is_cancelled() {
         return Ok(Conversion::Cancelled {
-            completed_files: vec![],
+            completed_files: Default::default(),
         });
     }
-    let (mut source, nodes, source_sha256) = reader::conversion_source(path)?;
+    let (mut source, nodes, source_sha256) = reader::conversion_source(path, cancel)?;
     if options.base_name.is_empty()
         || options.base_name.contains(['/', '\\', ':'])
         || options.base_name == "."
@@ -37,12 +51,12 @@ pub(super) fn convert(
             "Split limit must be greater than zero.",
         ));
     }
-    reader::inspect_nodes(path, &mut source, &nodes)?;
-    let excluded = planner::excluded(&nodes, &options.exclusions)?;
+    reader::validate_hierarchy(&nodes, cancel)?;
+    let excluded = planner::excluded(&nodes, &options.exclusions, cancel)?;
     let recovery = writer::recover(&mut source, nodes, cancel);
     if cancel.is_cancelled() {
         return Ok(Conversion::Cancelled {
-            completed_files: vec![],
+            completed_files: Default::default(),
         });
     }
     let recovery = recovery.map_err(|error| {
@@ -57,16 +71,16 @@ pub(super) fn convert(
     })?;
     if cancel.is_cancelled() {
         return Ok(Conversion::Cancelled {
-            completed_files: vec![],
+            completed_files: Default::default(),
         });
     }
     let selection = planner::Selection::new(recovery, excluded, cancel);
     if cancel.is_cancelled() {
         return Ok(Conversion::Cancelled {
-            completed_files: vec![],
+            completed_files: Default::default(),
         });
     }
-    let selection = selection.map_err(io_failure)?;
+    let selection = selection.map_err(node_failure)?;
     let split = matches!(options.split, Split::Bytes(_));
     let output_path = |part| {
         options.destination.join(if split {
@@ -89,7 +103,9 @@ pub(super) fn convert(
     }
     fs::create_dir_all(&options.destination).map_err(io_failure)?;
     flag_staging(&options.destination)?;
-    let selected = selection.part(&selection.items, split);
+    let selected = selection
+        .part(0..selection.items.len(), split, cancel)
+        .map_err(node_failure)?;
     let selected_folders = folder_mapping(&mut source, &selected, 1)?;
     preflight_space(
         path,
@@ -98,6 +114,7 @@ pub(super) fn convert(
         options.space_reserve_bytes,
     )?;
     drop(selected);
+    drop(selected_folders);
     let staging = options
         .destination
         .join(format!(".{}.pstoff-partial", options.base_name));
@@ -127,7 +144,9 @@ pub(super) fn convert(
         let mut accepted_differences = Records::default();
         loop {
             let part = files.len() as u32 + 1;
-            let planned = selection.part(&selection.items[start..end], split);
+            let planned = selection
+                .part(start..end, split, cancel)
+                .map_err(node_failure)?;
             let mut sink = |p: Progress| {
                 high_done = high_done.max(start as u64 + p.done);
                 progress.update(Progress {
@@ -174,7 +193,7 @@ pub(super) fn convert(
             } else {
                 fs::remove_file(&candidate).map_err(io_failure)?;
                 if accepted_end == start {
-                    if let Some(item) = selection.items.get(start) {
+                    if let Some(item) = selection.items.get(start).map_err(node_failure)? {
                         let reference = ItemRef {
                             folder: FolderRef(item.nid_parent),
                             node: item.nid,
@@ -215,7 +234,9 @@ pub(super) fn convert(
                     part,
                 })
                 .map_err(io_failure)?;
-            let planned = selection.part(&selection.items[start..accepted_end], split);
+            let planned = selection
+                .part(start..accepted_end, split, cancel)
+                .map_err(node_failure)?;
             folders
                 .append_cancellable(&folder_mapping(&mut source, &planned, part)?, cancel)
                 .map_err(io_failure)?;
@@ -258,23 +279,23 @@ pub(super) fn convert(
     match result {
         Err(_) if cancel.is_cancelled() => Ok(Conversion::Cancelled {
             completed_files: if split {
-                files.collect_records().map_err(io_failure)?
+                files.clone()
             } else {
-                vec![]
+                Records::default()
             },
         }),
         Err(mut error) => {
             if !split {
                 files = Records::default();
             }
-            error.completed_files = files.collect_records().map_err(io_failure)?;
+            error.completed_files = files.clone();
             Err(error)
         }
         Ok(None) => Ok(Conversion::Cancelled {
             completed_files: if split {
-                files.collect_records().map_err(io_failure)?
+                files.clone()
             } else {
-                vec![]
+                Records::default()
             },
         }),
         Ok(Some(report)) => {
@@ -301,6 +322,7 @@ fn folder_mapping(
         .iter()
         .filter(|n| matches!(n.nid_type(), 2 | 3))
     {
+        let folder = folder.map_err(node_failure)?;
         let mut count = 0;
         let mut bytes = 0u64;
         for item in planned
@@ -308,6 +330,7 @@ fn folder_mapping(
             .iter()
             .filter(|n| n.nid_parent == folder.nid && matches!(n.nid_type(), 4 | 8))
         {
+            let item = item.map_err(node_failure)?;
             count += 1;
             // Recovery already validated nested contexts. Report mapping needs
             // only this Item's size, so do not stage its tables again here.
@@ -881,4 +904,8 @@ mod report_cleanup_tests {
         assert!(!output.exists());
         fs::remove_dir(&root).unwrap();
     }
+}
+
+fn node_failure(e: Box<dyn std::error::Error>) -> EngineError {
+    failure(ErrorKind::Io, format!("Node staging failed: {e}"))
 }

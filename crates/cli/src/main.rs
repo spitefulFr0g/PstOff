@@ -192,8 +192,14 @@ fn run_convert(path: &Path, options: &ConvertOptions) -> ExitCode {
         }
         Err(error) => {
             eprintln!("Conversion failed: {error}");
-            for file in &error.completed_files {
-                eprintln!("Finished part kept: {}", file.path.display());
+            for file in error.completed_files.iter() {
+                match file {
+                    Ok(file) => eprintln!("Finished part kept: {}", file.path.display()),
+                    Err(e) => {
+                        eprintln!("Could not read finished-part records: {e}");
+                        break;
+                    }
+                }
             }
             ExitCode::from(error_code(&error.kind))
         }

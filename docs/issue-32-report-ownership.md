@@ -46,7 +46,14 @@ example test and all 26 Python harness tests. The dependency audit passed for
 376 Windows packages. This is synthetic regression evidence only; no private or
 unknown mail, SCANPST, manual Outlook acceptance or process-peak gate was run.
 
-## Still open
+## Continuation
+
+The next ownership slice and issue #32 acceptance work are documented in
+[Progress, Cancel and the measured regression gate](issue-32-progress-cancel.md).
+The lists and verification statement below describe the `a787ceb` base; consult
+that continuation for the current status.
+
+## Still open at this base
 
 - Source node vectors, `Recovery::nodes`, `Selection::items` and candidate-part
   node copies remain count-dependent, along with inspection folder trees,

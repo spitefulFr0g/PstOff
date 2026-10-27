@@ -18,6 +18,13 @@ adaptation also spills AMap records and streams other maps. See
 The historical inventory and original finalizer constraint below describe the
 pre-adaptation design baseline. Both acceptance contracts remain unproven.
 
+Issue #32 acceptance update: an observed **8 MiB private-commit regression gate**
+now covers a separate-process generated corpus through 4,096 distinct 256 KiB
+Items (1 GiB logical payload). See [protocol, measurements and scope](issue-32-progress-cancel.md).
+This is a corpus-specific process gate, not shared reservation accounting or
+proof of either broader contract below. The historical inventory remains a
+baseline for the remaining arbitrary-value and full-corpus work.
+
 ## Two distinct acceptance contracts
 
 1. **Payload working memory:** at most 16 MiB of explicitly reserved buffer

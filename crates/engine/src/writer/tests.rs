@@ -60,11 +60,11 @@ fn source_payload_relocation_is_selective_ordered_and_cancellable() {
         pos: AMAP + 2048,
         next: 1,
         blocks: spool::Spool::new().unwrap(),
-        nodes: &[],
+        nodes: &crate::nodes::Nodes::new().unwrap(),
         differences: crate::Records::default(),
         highwater: 1024,
         planned: cache::Plan::new().unwrap(),
-        omitted: Default::default(),
+        omitted: &Default::default(),
         created: Default::default(),
     };
     let root = output.source_stream(&mut source, bid, false).unwrap();
@@ -111,7 +111,9 @@ fn generated_large_output_indexes_are_bounded_and_reopen_with_exact_payloads() {
     let fixture = support::Fixture::invalid();
     let path = fixture.root.join("many-small-blocks.pst");
     let (_, peak) = allocations::measure(|| {
-        let mut out = tables::output(&path);
+        let nodes = crate::nodes::Nodes::new().unwrap();
+        let omitted = crate::nodes::IdSet::default();
+        let mut out = tables::output(&path, &nodes, &omitted);
         let mut entries = spool::Spool::new().unwrap();
         let mut order = spool::Index::new().unwrap();
         for ordinal in (0..COUNT).rev() {
@@ -188,7 +190,9 @@ fn output_tree_rejects_truncation_and_cancellation_and_partial_is_removed() {
             path: &path,
             keep: false,
         };
-        let mut out = tables::output(&path);
+        let nodes = crate::nodes::Nodes::new().unwrap();
+        let omitted = crate::nodes::IdSet::default();
+        let mut out = tables::output(&path, &nodes, &omitted);
         let mut records = spool::Spool::new().unwrap();
         records.append(&[0; 31]).unwrap();
         assert!(out.tree(records, 0x81, 32).is_err());
@@ -238,15 +242,15 @@ fn inspection_and_recovery_discard_large_unselected_properties() {
         .build();
         std::fs::write(&fixture.source, &bytes).unwrap();
         let (mut source, nodes) = crate::reader::read_source(&fixture.source).unwrap();
-        let item = nodes.iter().find(|n| n.nid_type() == 4).unwrap();
+        let item = nodes.iter().find(|n| n.nid_type() == 4).unwrap().unwrap();
         let (pc, peak) =
-            allocations::measure(|| crate::reader::item_properties(&mut source, item).unwrap());
+            allocations::measure(|| crate::reader::item_properties(&mut source, &item).unwrap());
         assert!(!pc.props.contains_key(&0x6801));
         assert!(
             peak < 256 * 1024,
             "unselected payload {len}, allocation delta {peak}"
         );
-        let full = pstoff_format::ltp::read_node_pc(&mut source, item).unwrap();
+        let full = pstoff_format::ltp::read_node_pc(&mut source, &item).unwrap();
         assert!(
             matches!(&full.props[&0x6801], pstoff_format::ltp::Value::Bytes(b) if b.len() == len && b.iter().all(|v| *v == 0x5a))
         );
@@ -320,7 +324,10 @@ fn growing_generated_folder_item_counts_keep_selection_identity_and_source_bytes
         let original: Vec<_> = nodes
             .iter()
             .filter(|n| n.nid_type() == 4)
-            .map(|n| (n.nid, n.nid_parent, n.bid_data, n.bid_sub))
+            .map(|n| {
+                let n = n.unwrap();
+                (n.nid, n.nid_parent, n.bid_data, n.bid_sub)
+            })
             .collect();
         let inspection =
             crate::reader::inspect_nodes(&fixture.source, &mut source, &nodes).unwrap();
@@ -336,9 +343,14 @@ fn growing_generated_folder_item_counts_keep_selection_identity_and_source_bytes
         let selection =
             crate::planner::Selection::new(recovery, Default::default(), &Default::default())
                 .unwrap();
-        for item in &selection.items {
-            let part = selection.part(std::slice::from_ref(item), true);
-            let retained: Vec<_> = part.nodes.iter().filter(|n| n.nid_type() == 4).collect();
+        for i in 0..selection.items.len() {
+            let part = selection.part(i..i + 1, true, &Default::default()).unwrap();
+            let retained: Vec<_> = part
+                .nodes
+                .iter()
+                .filter(|n| n.nid_type() == 4)
+                .map(Result::unwrap)
+                .collect();
             assert_eq!(retained.len(), 1);
             assert!(original.contains(&(
                 retained[0].nid,
@@ -350,4 +362,74 @@ fn growing_generated_folder_item_counts_keep_selection_identity_and_source_bytes
         }
         assert_eq!(std::fs::read(&fixture.source).unwrap(), bytes);
     }
+}
+
+#[test]
+fn high_count_node_ownership_stays_on_disk_through_selection_and_parts() {
+    use crate::nodes::{IdSet, Nodes};
+    let cancel = crate::CancelToken::default();
+    let ((), peak) = allocations::measure(|| {
+        let mut nodes = Nodes::new().unwrap();
+        for nid in [0x122, 0x222, 0x242, 0x262] {
+            nodes
+                .push(Node {
+                    nid,
+                    nid_parent: 0x122,
+                    bid_data: 0,
+                    bid_sub: 0,
+                })
+                .unwrap();
+        }
+        // Reverse input makes disk ordering observable without an in-memory expected vector.
+        for i in (0..25_000u32).rev() {
+            nodes
+                .push(Node {
+                    nid: 0x10004 + i * 32,
+                    nid_parent: 0x222,
+                    bid_data: u64::from(i) * 4,
+                    bid_sub: u64::from(i) * 8,
+                })
+                .unwrap();
+        }
+        let recovery = recovery::Recovery {
+            nodes,
+            system: system::SystemFolders {
+                subtree: 0x222,
+                deleted: 0x242,
+                finder: 0x262,
+            },
+            created: Default::default(),
+            omitted: IdSet::default(),
+            skipped: Default::default(),
+            evidence: crate::CompletenessEvidence {
+                headers_only: crate::Evidence::NotChecked,
+                unreadable: crate::Evidence::NotChecked,
+                external_references: crate::Evidence::NotChecked,
+            },
+        };
+        let selection =
+            crate::planner::Selection::new(recovery, IdSet::default(), &cancel).unwrap();
+        assert_eq!(selection.items.len(), 25_000);
+        for (i, n) in selection.items.iter().enumerate() {
+            let n = n.unwrap();
+            assert_eq!(n.nid, 0x10004 + i as u32 * 32);
+            assert_eq!((n.bid_data, n.bid_sub), (i as u64 * 4, i as u64 * 8));
+        }
+        let part = selection.part(24_993..25_000, true, &cancel).unwrap();
+        assert_eq!(
+            part.nodes
+                .iter()
+                .filter(|n| n.nid_type() == 4)
+                .count()
+                .unwrap(),
+            7
+        );
+        assert_eq!(part.omitted.len(), 24_993);
+        assert_eq!(selection.recovery.nodes.len(), 25_004);
+        assert_eq!(
+            selection.recovery.nodes.get(4).unwrap().unwrap().nid,
+            0x10004 + 24_999 * 32
+        );
+    });
+    assert!(peak < 256 * 1024, "node ownership allocated {peak} bytes");
 }

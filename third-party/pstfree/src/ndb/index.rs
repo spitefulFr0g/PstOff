@@ -6,6 +6,173 @@
 use super::*;
 
 impl Pst {
+    /// Strict, ordered node traversal with one page per level and no visited set.
+    /// Callback failures (including staging I/O and cancellation) propagate unchanged.
+    pub fn visit_nodes<E: From<String>>(
+        &mut self,
+        mut visit: impl FnMut(Node) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.visit_node_range(self.nbt_root, None, None, None, &mut visit)
+    }
+
+    fn visit_node_range<E: From<String>>(
+        &mut self,
+        at: Bref,
+        expected: Option<u8>,
+        lower: Option<u64>,
+        upper: Option<u64>,
+        visit: &mut impl FnMut(Node) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let bytes = self.read_page(at).map_err(E::from)?;
+        let f = self.page.footer;
+        let (count, size, level) = if self.page.wide_counts {
+            (
+                u16le(&bytes, f) as usize,
+                bytes[f + 4] as usize,
+                bytes[f + 5],
+            )
+        } else {
+            (bytes[f] as usize, bytes[f + 2] as usize, bytes[f + 3])
+        };
+        let w = self.page.w();
+        let need = if level == 0 { w * 3 + 4 } else { w * 3 };
+        if bytes[self.page.trailer] != PTYPE_NBT
+            || size < need
+            || count * size > f
+            || u32::from(level) > MAX_BTREE_DEPTH
+            || expected.is_some_and(|e| level != e)
+            || (count == 0 && (lower.is_some() || level != 0))
+        {
+            return Err(E::from(
+                "Invalid node-index page geometry or child level".into(),
+            ));
+        }
+        let mut previous = None;
+        for i in 0..count {
+            let e = &bytes[i * size..(i + 1) * size];
+            let key = self.page.wide(e, 0);
+            if key > u32::MAX as u64
+                || previous.is_some_and(|p| key <= p)
+                || (i == 0 && lower.is_some_and(|min| key != min))
+                || upper.is_some_and(|max| key >= max)
+            {
+                return Err(E::from("Duplicate or out-of-order node-index key".into()));
+            }
+            previous = Some(key);
+            if level == 0 {
+                visit(Node {
+                    nid: key as u32,
+                    bid_data: self.page.wide(e, w),
+                    bid_sub: self.page.wide(e, w * 2),
+                    nid_parent: u32le(e, w * 3),
+                })?;
+            } else {
+                let next = if i + 1 < count {
+                    Some(self.page.wide(&bytes, (i + 1) * size))
+                } else {
+                    upper
+                };
+                self.visit_node_range(
+                    self.page.bref(e, w),
+                    Some(level - 1),
+                    Some(key),
+                    next,
+                    visit,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a local NID without owning the namespace. Strict callers validate
+    /// the complete namespace, including damage after the requested entry.
+    pub fn subnode(&mut self, bid: u64, nid: u32) -> Result<Option<Sub>, String> {
+        if !self.strict {
+            return Ok(self.subnodes(bid)?.get(&nid).copied());
+        }
+        let mut found = None;
+        self.visit_subnodes::<String>(bid, |id, sub| {
+            if id == nid {
+                found = Some(sub);
+            }
+            Ok(())
+        })?;
+        Ok(found)
+    }
+
+    /// Visit one local namespace in NID order, retaining only a parent and leaf block.
+    pub fn visit_subnodes<E: From<String>>(
+        &mut self,
+        bid: u64,
+        mut visit: impl FnMut(u32, Sub) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if bid == 0 {
+            return Ok(());
+        }
+        self.visit_subnode_range(bid, None, None, None, &mut visit)
+    }
+    fn visit_subnode_range<E: From<String>>(
+        &mut self,
+        bid: u64,
+        expected: Option<u8>,
+        lower: Option<u64>,
+        upper: Option<u64>,
+        visit: &mut impl FnMut(u32, Sub) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let bytes = self.block(bid).map_err(E::from)?;
+        if bytes.len() < 8 || bytes[0] != 2 {
+            return Err(E::from("Invalid subnode block".into()));
+        }
+        let level = bytes[1];
+        let count = u16le(&bytes, 2) as usize;
+        let w = self.page.w();
+        let head = self.page.sub_header();
+        let width = if level == 0 { w * 3 } else { w * 2 };
+        if level > 1
+            || expected.is_some_and(|e| e != level)
+            || head + count * width > bytes.len()
+            || (count == 0 && (lower.is_some() || level != 0))
+        {
+            return Err(E::from("Invalid subnode geometry or child level".into()));
+        }
+        let mut previous = None;
+        for i in 0..count {
+            let e = head + i * width;
+            let key = self.page.wide(&bytes, e);
+            if key > u32::MAX as u64
+                || previous.is_some_and(|p| key <= p)
+                || (i == 0 && lower.is_some_and(|min| key != min))
+                || upper.is_some_and(|max| key >= max)
+            {
+                return Err(E::from("Duplicate or out-of-order subnode key".into()));
+            }
+            previous = Some(key);
+            if level == 0 {
+                visit(
+                    key as u32,
+                    Sub {
+                        data: self.page.wide(&bytes, e + w),
+                        sub: self.page.wide(&bytes, e + w * 2),
+                    },
+                )?;
+            } else {
+                let next = if i + 1 < count {
+                    Some(self.page.wide(&bytes, e + width))
+                } else {
+                    upper
+                };
+                self.visit_subnode_range(
+                    self.page.wide(&bytes, e + w),
+                    Some(0),
+                    Some(key),
+                    next,
+                    visit,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn bbt_page(&mut self, at: Bref) -> Result<(Vec<u8>, usize, usize, u8), String> {
         let bytes = self.read_page(at)?;
         if bytes[self.page.trailer] != PTYPE_BBT {
@@ -123,6 +290,9 @@ mod tests {
     // File-backed BBT-only corpus. Neither the builder nor lookup retains a
     // vector of records/pages. This is an index test, not a conversion fixture.
     fn fixture(count: u64, layout: Layout) -> Fixture {
+        fixture_kind(count, layout, PTYPE_BBT)
+    }
+    fn fixture_kind(count: u64, layout: Layout, kind: u8) -> Fixture {
         static SERIAL: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "pstoff-bbt-{}-{}.bin",
@@ -135,7 +305,7 @@ mod tests {
             .create_new(true)
             .open(&path)
             .unwrap();
-        fn tree(file: &mut File, layout: Layout, first: u64, count: u64) -> Bref {
+        fn tree(file: &mut File, layout: Layout, first: u64, count: u64, kind: u8) -> Bref {
             const FANOUT: u64 = 16;
             let mut page = vec![0; layout.size as usize];
             let w = layout.w();
@@ -145,7 +315,15 @@ mod tests {
                 level += 1;
                 span *= FANOUT;
             }
-            let width = if level == 0 { 2 * w + 4 } else { 3 * w };
+            let width = if level == 0 {
+                if kind == PTYPE_NBT {
+                    3 * w + 4
+                } else {
+                    2 * w + 4
+                }
+            } else {
+                3 * w
+            };
             let step = if level == 0 { 1 } else { span / FANOUT };
             let entries = count.div_ceil(step);
             let put = |bytes: &mut [u8], at: usize, n: u64| {
@@ -159,7 +337,7 @@ mod tests {
                     put(&mut page, offset + w, 0x100000 + ordinal * 64);
                     page[offset + 2 * w..offset + 2 * w + 2].copy_from_slice(&13u16.to_le_bytes());
                 } else {
-                    let child = tree(file, layout, ordinal, step.min(count - i * step));
+                    let child = tree(file, layout, ordinal, step.min(count - i * step), kind);
                     put(&mut page, offset + w, child.bid);
                     put(&mut page, offset + 2 * w, child.ib);
                 }
@@ -178,8 +356,8 @@ mod tests {
             file.seek(SeekFrom::Start(ib)).unwrap();
             let at = Bref { bid: ib * 4, ib };
             let t = layout.trailer;
-            page[t] = PTYPE_BBT;
-            page[t + 1] = PTYPE_BBT;
+            page[t] = kind;
+            page[t + 1] = kind;
             let crc = crc32(&page[..t]);
             if layout.narrow {
                 put(&mut page, t + 4, at.bid);
@@ -191,7 +369,7 @@ mod tests {
             file.write_all(&page).unwrap();
             at
         }
-        let root = tree(&mut file, layout, 1, count);
+        let root = tree(&mut file, layout, 1, count, kind);
         let actual_len = file.metadata().unwrap().len();
         Fixture {
             path,
@@ -211,6 +389,86 @@ mod tests {
                 strict: true,
                 suppressed: 0,
             },
+        }
+    }
+
+    #[test]
+    fn bounded_node_walk_matches_legacy_multilevel_inventory_and_preserves_source() {
+        fn fingerprint(file: &mut File) -> (u64, u64) {
+            file.seek(SeekFrom::Start(0)).unwrap();
+            let mut buffer = [0; 4096];
+            let mut hash = 0u64;
+            let mut len = 0;
+            loop {
+                let n = file.read(&mut buffer).unwrap();
+                if n == 0 {
+                    break;
+                }
+                for b in &buffer[..n] {
+                    hash = hash.wrapping_mul(1099511628211).wrapping_add(u64::from(*b));
+                }
+                len += n as u64;
+            }
+            (len, hash)
+        }
+        for layout in [LAYOUT_ANSI, LAYOUT_512, LAYOUT_4K] {
+            let mut f = fixture_kind(65_536, layout, PTYPE_NBT);
+            let before = fingerprint(&mut f.pst.file);
+            let legacy = f.pst.nodes();
+            assert!(f.pst.warnings.is_empty());
+            let mut count = 0;
+            f.pst
+                .visit_nodes::<String>(|n| {
+                    let expected = legacy[count];
+                    assert_eq!(
+                        (n.nid, n.nid_parent, n.bid_data, n.bid_sub),
+                        (
+                            expected.nid,
+                            expected.nid_parent,
+                            expected.bid_data,
+                            expected.bid_sub
+                        )
+                    );
+                    count += 1;
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(count, 65_536);
+            assert_eq!(before, fingerprint(&mut f.pst.file));
+            let mut visits = 0;
+            let error = f
+                .pst
+                .visit_nodes::<String>(|_| {
+                    visits += 1;
+                    if visits == 32_768 {
+                        Err("synthetic cancellation".into())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(error, "synthetic cancellation");
+            assert_eq!(visits, 32_768);
+        }
+    }
+
+    #[test]
+    fn bounded_node_walk_rejects_duplicate_separators_cycles_and_geometry() {
+        for mode in 0..3 {
+            let mut f = fixture_kind(128, LAYOUT_4K, PTYPE_NBT);
+            let root = f.pst.nbt_root;
+            edit_root(&mut f, |b| match mode {
+                0 => {
+                    let first = b[..8].to_vec();
+                    b[24..32].copy_from_slice(&first);
+                }
+                1 => {
+                    b[8..16].copy_from_slice(&root.bid.to_le_bytes());
+                    b[16..24].copy_from_slice(&root.ib.to_le_bytes());
+                }
+                _ => b[LAYOUT_4K.footer + 4] = 0,
+            });
+            assert!(f.pst.visit_nodes::<String>(|_| Ok(())).is_err());
         }
     }
 

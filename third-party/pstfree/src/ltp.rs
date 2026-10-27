@@ -524,7 +524,6 @@ pub fn read_pc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Pc, String>
     }
 
     // Only fetched if some property actually points out of the heap, which most do not.
-    let mut subs = None;
     let mut from_subnode = 0;
 
     let mut props = BTreeMap::new();
@@ -560,10 +559,7 @@ pub fn read_pc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Pc, String>
         } else if raw & 0x1F == 0 {
             heap.item(raw)?.to_vec()
         } else {
-            if subs.is_none() {
-                subs = Some(pst.subnodes(bid_sub)?);
-            }
-            match subs.as_ref().unwrap().get(&raw).copied() {
+            match pst.subnode(bid_sub, raw)? {
                 Some(s) => {
                     from_subnode += 1;
                     pst.node_blocks(s.data)?.concat()
@@ -822,7 +818,7 @@ pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String>
     } else if hnid_rows & 0x1F == 0 {
         vec![heap.item(hnid_rows)?.to_vec()]
     } else {
-        match pst.subnodes(bid_sub)?.get(&hnid_rows).copied() {
+        match pst.subnode(bid_sub, hnid_rows)? {
             Some(s) => pst.node_blocks(s.data)?,
             None => {
                 return Err(format!(
@@ -835,7 +831,6 @@ pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String>
     // A row never straddles two blocks: each block holds as many whole rows as fit and
     // the remainder is padding. Concatenating the blocks first would shift every row
     // after the first block by that padding and quietly produce garbage.
-    let mut subs = None;
     let mut rows = Vec::new();
     for b in &blocks {
         for r in b.chunks_exact(width).take(b.len() / width) {
@@ -870,10 +865,7 @@ pub fn read_tc(pst: &mut Pst, bid_data: u64, bid_sub: u64) -> Result<Tc, String>
                     } else if hnid & 0x1F == 0 {
                         heap.item(hnid)?.to_vec()
                     } else {
-                        if subs.is_none() {
-                            subs = Some(pst.subnodes(bid_sub)?);
-                        }
-                        match subs.as_ref().unwrap().get(&hnid).copied() {
+                        match pst.subnode(bid_sub, hnid)? {
                             Some(s) => pst.node_blocks(s.data)?.concat(),
                             None => {
                                 props.insert(c.prop, Value::MissingSubnode(hnid));

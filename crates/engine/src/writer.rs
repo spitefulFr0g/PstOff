@@ -57,11 +57,11 @@ struct Output<'a> {
     pos: u64,
     next: u64,
     blocks: spool::Spool,
-    nodes: &'a [Node],
+    nodes: &'a crate::nodes::Nodes,
     differences: crate::Records<crate::Difference>,
     highwater: u32,
     planned: cache::Plan,
-    omitted: std::collections::HashSet<u32>,
+    omitted: &'a crate::nodes::IdSet,
     created: std::collections::BTreeMap<u32, String>,
 }
 impl Output<'_> {
@@ -219,16 +219,24 @@ impl Output<'_> {
         if depth > 32 {
             return Err("Cyclic or excessive subnode depth".into());
         }
-        let mut subs: Vec<_> = source.subnodes(bid)?.into_iter().collect();
-        subs.sort_by_key(|s| s.0);
-        let mut entries = Vec::new();
-        for (nid, sub) in subs {
-            let (data, below) = self.context(source, sub.data, sub.sub, depth + 1)?;
-            entries.push((nid, data, below));
+        let subs = crate::nodes::Nodes::namespace(source, bid, &self.cancel)?;
+        let mut entries = crate::nodes::Nodes::new()?;
+        for n in &subs {
+            if self.cancel.is_cancelled() {
+                return Ok(0);
+            }
+            let n = n?;
+            let (data, below) = self.context(source, n.bid_data, n.bid_sub, depth + 1)?;
+            entries.push(Node {
+                nid: n.nid,
+                nid_parent: 0,
+                bid_data: data,
+                bid_sub: below,
+            })?;
         }
         self.subentries(&entries)
     }
-    fn subentries(&mut self, entries: &[(u32, u64, u64)]) -> Result<u64> {
+    fn subentries(&mut self, entries: &crate::nodes::Nodes) -> Result<u64> {
         if entries.is_empty() {
             return Ok(0);
         }
@@ -236,16 +244,24 @@ impl Output<'_> {
             return Err("Subnode tree too large".into());
         }
         let mut leaves = Vec::new();
-        for group in entries.chunks(340) {
-            let mut b = vec![0; 8 + group.len() * 24];
-            b[0] = 2;
-            p16(&mut b, 2, group.len() as u16);
-            for (i, (nid, data, sub)) in group.iter().enumerate() {
-                p64(&mut b, 8 + i * 24, *nid as u64);
-                p64(&mut b, 16 + i * 24, *data);
-                p64(&mut b, 24 + i * 24, *sub);
+        let mut offset = 0;
+        while offset < entries.len() {
+            if self.cancel.is_cancelled() {
+                return Ok(0);
             }
-            leaves.push((group[0].0, self.block(&b, true)?));
+            let count = (entries.len() - offset).min(340);
+            let mut b = vec![0; 8 + count * 24];
+            b[0] = 2;
+            p16(&mut b, 2, count as u16);
+            let first = entries.get(offset)?.ok_or("Missing local node")?.nid;
+            for i in 0..count {
+                let n = entries.get(offset + i)?.ok_or("Missing local node")?;
+                p64(&mut b, 8 + i * 24, u64::from(n.nid));
+                p64(&mut b, 16 + i * 24, n.bid_data);
+                p64(&mut b, 24 + i * 24, n.bid_sub);
+            }
+            offset += count;
+            leaves.push((first, self.block(&b, true)?));
         }
         if leaves.len() == 1 {
             return Ok(leaves[0].1);
@@ -307,7 +323,7 @@ impl Output<'_> {
                 if matches!(nid & 31, 0xd..=0x10) {
                     table
                         .rows
-                        .rewrite(|(row, _, _)| Ok(!self.omitted.contains(row)))?;
+                        .rewrite(|(row, _, _)| Ok(!self.omitted.contains(row)?))?;
                 }
                 if nid & 31 == 0xd {
                     for n in self.nodes.iter().filter(|n| {
@@ -315,6 +331,7 @@ impl Output<'_> {
                             && n.nid != (nid & !31 | 2)
                             && n.nid_parent == (nid & !31 | 2)
                     }) {
+                        let n = n?;
                         table.add_identity_row(n.nid)?;
                     }
                     // Hierarchy rows cache child counts. Keep those caches in
@@ -330,14 +347,14 @@ impl Output<'_> {
                                             .filter(|n| {
                                                 n.nid_parent == *folder && n.nid_type() == kind
                                             })
-                                            .count() as u32,
+                                            .count()? as u32,
                                     )
                                 }
                                 0x360a => Some(u32::from(self.nodes.iter().any(|n| {
                                     n.nid != *folder
                                         && n.nid_parent == *folder
                                         && matches!(n.nid_type(), 2 | 3)
-                                }))),
+                                })?)),
                                 _ => None,
                             };
                             if let Some(value) = value {
@@ -374,11 +391,7 @@ impl Output<'_> {
                     .ok_or("Contents node is not a table")?
                     .rebuild_contents(
                         |item| {
-                            let node = self
-                                .nodes
-                                .iter()
-                                .find(|n| n.nid == item)
-                                .ok_or("Missing indexed Item")?;
+                            let node = self.nodes.by_id(item)?.ok_or("Missing indexed Item")?;
                             let mut cells = context::selected_properties(
                                 source,
                                 node.bid_data,
@@ -394,16 +407,21 @@ impl Output<'_> {
                         &mut self.differences,
                     )?;
             }
-            let mut entries = vec![];
-            let mut subs: Vec<_> = source.subnodes(sub)?.into_iter().collect();
-            subs.sort_by_key(|s| s.0);
-            let mut next = subs.iter().map(|s| s.0 >> 5).max().unwrap_or(0) + 1;
-            for (nid, s) in subs {
+            let mut entries = crate::nodes::Nodes::new()?;
+            let subs = crate::nodes::Nodes::namespace(source, sub, &self.cancel)?;
+            let mut next = subs.iter().max_key(|n| n.nid >> 5)?.unwrap_or(0) + 1;
+            for n in &subs {
                 if self.cancel.is_cancelled() {
                     return Ok((0, 0));
                 }
-                let (data, below) = self.context(source, s.data, s.sub, depth + 1)?;
-                entries.push((nid, data, below));
+                let n = n?;
+                let (data, below) = self.context(source, n.bid_data, n.bid_sub, depth + 1)?;
+                entries.push(Node {
+                    nid: n.nid,
+                    nid_parent: 0,
+                    bid_data: data,
+                    bid_sub: below,
+                })?;
             }
             let mut heap = context::HeapBuilder::new(if is_pc { 0xbc } else { 0x7c })?;
             let mut payload = |blocks: &mut dyn Iterator<Item = Result<Vec<u8>>>| -> Result<u32> {
@@ -414,7 +432,12 @@ impl Output<'_> {
                 next += 1;
                 self.highwater = self.highwater.max(next);
                 let data = self.stream_chunks(blocks, true)?;
-                entries.push((nid, data, 0));
+                entries.push(Node {
+                    nid,
+                    nid_parent: 0,
+                    bid_data: data,
+                    bid_sub: 0,
+                })?;
                 Ok(nid)
             };
             let root = if let Some(cells) = cells {
@@ -424,7 +447,7 @@ impl Output<'_> {
             } else {
                 table.unwrap().build(&mut heap, &mut payload)?
             };
-            entries.sort_by_key(|s| s.0);
+            // Existing namespace keys are ordered; generated payload keys follow its maximum.
             let below = self.subentries(&entries)?;
             let data = self.stream_chunks(&mut heap.finish(root, &self.cancel)?.iter(), true)?;
             Ok((data, below))
@@ -520,7 +543,7 @@ pub(super) fn write(
     let total = nodes
         .iter()
         .filter(|n| matches!(n.nid_type(), 4 | 8))
-        .count() as u64;
+        .count()? as u64;
     let mut done = 0;
     progress.update(crate::Progress {
         fraction: 0.0,
@@ -555,7 +578,7 @@ pub(super) fn write(
                     crate::ErrorKind::DamagedSource
                 },
                 message: format!("Source cache planning failed: {error}"),
-                completed_files: vec![],
+                completed_files: Default::default(),
             }
         })?
     else {
@@ -577,12 +600,13 @@ pub(super) fn write(
         differences,
         highwater: 1024,
         planned,
-        omitted: omitted.clone(),
+        omitted,
         created: recovery.created.clone(),
     };
     let mut entries = spool::Spool::new()?;
     let mut order = spool::Index::new()?;
     for node in nodes {
+        let node = node?;
         if cancel.is_cancelled() {
             return Ok(None);
         }
@@ -593,7 +617,7 @@ pub(super) fn write(
                 0,
                 nodes
                     .iter()
-                    .any(|n| n.nid != node.nid && n.nid_parent == node.nid),
+                    .any(|n| n.nid != node.nid && n.nid_parent == node.nid)?,
             ))
         } else if !omitted.is_empty() && matches!(node.nid_type(), 2 | 3) {
             let mut cells = context::properties(source, node.bid_data, node.bid_sub)?;
@@ -602,7 +626,7 @@ pub(super) fn write(
                     let count = nodes
                         .iter()
                         .filter(|n| n.nid_parent == node.nid && n.nid_type() == kind)
-                        .count() as u32;
+                        .count()? as u32;
                     let bytes = count.to_le_bytes().to_vec();
                     if cell.bytes != bytes {
                         out.differences.push(crate::Difference { property: (id as u32) << 16 | cell.kind as u32, item: None, source: format!("Folder 0x{:x}", node.nid), reason: "Folder count reflects Items selected for this part after exclusions and reported skips.".into() })?;
@@ -613,7 +637,7 @@ pub(super) fn write(
             if let Some(cell) = cells.get_mut(&0x360a) {
                 let has_children = nodes.iter().any(|n| {
                     n.nid != node.nid && n.nid_parent == node.nid && matches!(n.nid_type(), 2 | 3)
-                });
+                })?;
                 let bytes = if cell.kind == 0xb {
                     vec![u8::from(has_children)]
                 } else {
@@ -653,20 +677,17 @@ pub(super) fn write(
         let (data, sub) = if recovery.created.contains_key(&node.nid) || generated_table {
             let mut heap = context::HeapBuilder::new(if generated_table { 0x7c } else { 0xbc })?;
             let root = if generated_table {
-                let rows = if node.nid_type() == 0xd {
-                    nodes
-                        .iter()
-                        .filter(|n| {
-                            n.nid != (node.nid & !31 | 2)
-                                && n.nid_parent == (node.nid & !31 | 2)
-                                && matches!(n.nid_type(), 2 | 3)
-                        })
-                        .map(|n| n.nid)
-                        .collect()
-                } else {
-                    vec![]
-                };
-                table::empty(rows)?.build(&mut heap, |_| {
+                let mut generated = table::empty(vec![])?;
+                if node.nid_type() == 0xd {
+                    for n in nodes.iter().filter(|n| {
+                        n.nid != (node.nid & !31 | 2)
+                            && n.nid_parent == (node.nid & !31 | 2)
+                            && matches!(n.nid_type(), 2 | 3)
+                    }) {
+                        generated.add_identity_row(n?.nid)?;
+                    }
+                }
+                generated.build(&mut heap, |_| {
                     Err("Unexpected generated table payload".into())
                 })?
             } else {
@@ -746,8 +767,7 @@ pub(super) fn write(
         let next = nodes
             .iter()
             .filter(|n| n.nid_type() as usize == i)
-            .map(|n| (n.nid >> 5) + 1)
-            .max()
+            .max_key(|n| (n.nid >> 5) + 1)?
             .unwrap_or(1024)
             .max(1024)
             .max(previous);

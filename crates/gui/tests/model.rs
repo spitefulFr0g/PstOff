@@ -535,11 +535,17 @@ fn failed_conversion_keeps_the_engines_message_and_finished_parts() {
         .push_back(Err(pstoff_engine::EngineError {
             kind: pstoff_engine::ErrorKind::OversizedItem(item(inbox, 0x2000a4)),
             message: "An Item is larger than the Split limit.".into(),
-            completed_files: vec![OutputFile {
-                path: t.out().join("m-part001.pst"),
-                bytes: 10,
-                part: 1,
-            }],
+            completed_files: {
+                let mut records = pstoff_engine::Records::default();
+                records
+                    .push(OutputFile {
+                        path: t.out().join("m-part001.pst"),
+                        bytes: 10,
+                        part: 1,
+                    })
+                    .unwrap();
+                records
+            },
         }));
     to_convert(&mut w, t.out());
     w.start().unwrap().execute(engine.as_ref());

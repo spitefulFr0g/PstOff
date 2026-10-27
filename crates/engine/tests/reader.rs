@@ -390,7 +390,7 @@ fn named_property_map_checks_streams_and_preserves_item_readability() {
         ]);
         let f = support::Fixture::invalid();
         let bytes =
-            generated_store(&[(0x122, 0, size_pc(0)), (0x124, 0x122, item), (0x61, 0, map)]);
+            generated_store(&[(0x61, 0, map), (0x122, 0, size_pc(0)), (0x124, 0x122, item)]);
         std::fs::write(&f.source, &bytes).unwrap();
         if bad {
             assert!(matches!(
@@ -417,10 +417,11 @@ fn recipient_and_attachment_contexts_are_read_and_damage_is_visible() {
         let mut subs = vec![0; 56];
         subs[0] = 2;
         put16(&mut subs, 2, 2);
-        put64(&mut subs, 8, 0x692);
-        put64(&mut subs, 16, 20);
-        put64(&mut subs, 32, 0x685);
-        put64(&mut subs, 40, 24);
+        // SLENTRY keys are ordered; keep each local NID paired with its own context.
+        put64(&mut subs, 8, 0x685);
+        put64(&mut subs, 16, 24);
+        put64(&mut subs, 32, 0x692);
+        put64(&mut subs, 40, 20);
         let f = support::Fixture::invalid();
         let mut bytes = generated_store(&[
             (0x122, 0, size_pc(0)),

@@ -261,10 +261,14 @@ impl Heap {
 struct Writer {
     nodes: BTreeMap<u32, (u32, u64, u64)>,
     blocks: Vec<(u64, Vec<u8>)>,
+    disk: Option<large::Disk>,
 }
 impl Writer {
     fn block(&mut self, bytes: Vec<u8>, internal: bool) -> u64 {
         assert!(bytes.len() <= 8000);
+        if let Some(disk) = &mut self.disk {
+            return disk.block(&bytes, internal);
+        }
         let bid = 12 + self.blocks.len() as u64 * 4 + if internal { 2 } else { 0 };
         self.blocks.push((bid, bytes));
         bid
@@ -643,3 +647,7 @@ fn page(entries: &[u8], width: u8, kind: u8, id: u64, at: usize) -> Vec<u8> {
     p32(&mut b, 4076, sum);
     b
 }
+
+#[allow(dead_code)]
+#[path = "large.rs"]
+pub mod large;

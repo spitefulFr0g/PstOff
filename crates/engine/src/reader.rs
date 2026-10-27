@@ -1,7 +1,7 @@
 //! Read-only store boundary. Format details never escape through the frontend API.
 use crate::{EngineError, ErrorKind, Folder, FolderRef, Inspection, Support, UnsupportedReason};
 use pstoff_format::{ltp, ndb::Pst};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -10,7 +10,7 @@ fn error(kind: ErrorKind, message: impl Into<String>) -> EngineError {
     EngineError {
         kind,
         message: message.into(),
-        completed_files: Vec::new(),
+        completed_files: Default::default(),
     }
 }
 fn open(path: &Path) -> Result<File, EngineError> {
@@ -86,16 +86,23 @@ pub(crate) fn item_properties(
     {
         return Err("An Item property payload is missing".into());
     }
-    let mut pending = vec![(node.bid_sub, 0)];
-    let mut visited = HashSet::new();
-    while let Some((bid, depth)) = pending.pop() {
+    let mut pending = crate::nodes::Pending::new(node.bid_sub)?;
+    let mut visited = crate::writer::spool::WideIndex::new()?;
+    while let Some((bid, depth)) = pending.pop()? {
         if bid == 0 {
             continue;
         }
-        if depth > 32 || !visited.insert(bid) {
+        if depth > 32 || visited.insert(bid, 0)?.is_some() {
             return Err("Cyclic or excessively nested Item subnodes".into());
         }
-        for (nid, sub) in store.subnodes(bid)? {
+        for n in crate::nodes::Nodes::namespace(store, bid, &crate::CancelToken::default())?.iter()
+        {
+            let n = n?;
+            let nid = n.nid;
+            let sub = pstoff_format::ndb::Sub {
+                data: n.bid_data,
+                sub: n.bid_sub,
+            };
             match nid & 31 {
                 4 | 5 => {
                     crate::writer::evidence_properties(
@@ -111,7 +118,7 @@ pub(crate) fn item_properties(
                 }
                 _ => (),
             }
-            pending.push((sub.sub, depth + 1));
+            pending.push(sub.sub, depth + 1)?;
         }
     }
     Ok(pc)
@@ -119,27 +126,29 @@ pub(crate) fn item_properties(
 
 /// Conversion must retain this handle until its source reads finish. The same
 /// classified, read-only handle is used for header, indexes, and all data blocks.
-pub(crate) fn read_source(
-    path: &Path,
-) -> Result<(Pst, Vec<pstoff_format::ndb::Node>), EngineError> {
-    read_handle(open(path)?)
+pub(crate) fn read_source(path: &Path) -> Result<(Pst, crate::nodes::Nodes), EngineError> {
+    read_handle(open(path)?, &crate::CancelToken::default())
 }
 
 pub(crate) fn conversion_source(
     path: &Path,
-) -> Result<(Pst, Vec<pstoff_format::ndb::Node>, String), EngineError> {
+    cancel: &crate::CancelToken,
+) -> Result<(Pst, crate::nodes::Nodes, String), EngineError> {
     use sha2::{Digest, Sha256};
     let file = open(path)?;
     let mut identity = file
         .try_clone()
         .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
-    let (store, nodes) = read_handle(file)?;
+    let (store, nodes) = read_handle(file, cancel)?;
     identity
         .seek(SeekFrom::Start(0))
         .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
     let mut digest = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
+        if cancel.is_cancelled() {
+            return Err(error(ErrorKind::Io, "Source identity cancelled"));
+        }
         let n = identity
             .read(&mut buffer)
             .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
@@ -151,7 +160,10 @@ pub(crate) fn conversion_source(
     Ok((store, nodes, format!("{:x}", digest.finalize())))
 }
 
-fn read_handle(mut file: File) -> Result<(Pst, Vec<pstoff_format::ndb::Node>), EngineError> {
+fn read_handle(
+    mut file: File,
+    cancel: &crate::CancelToken,
+) -> Result<(Pst, crate::nodes::Nodes), EngineError> {
     match classify(&mut file)? {
         Support::Unsupported(reason) => {
             return Err(error(
@@ -169,14 +181,40 @@ fn read_handle(mut file: File) -> Result<(Pst, Vec<pstoff_format::ndb::Node>), E
             "The OST header failed integrity checks.",
         ));
     }
-    let nodes = store.nodes();
+    let mut nodes = crate::nodes::Nodes::new().map_err(|e| error(ErrorKind::Io, e.to_string()))?;
+    store
+        .visit_nodes::<Box<dyn std::error::Error>>(|n| {
+            if cancel.is_cancelled() {
+                return Err("Source inventory cancelled".into());
+            }
+            nodes.push(n)
+        })
+        .map_err(|e| {
+            error(
+                if e.is::<std::io::Error>() {
+                    ErrorKind::Io
+                } else {
+                    ErrorKind::DamagedSource
+                },
+                e.to_string(),
+            )
+        })?;
     if !store.warnings.is_empty() {
         return Err(error(
             ErrorKind::DamagedSource,
             "The OST node index could not be read completely.",
         ));
     }
-    ltp::read_named_properties(&mut store, &nodes).map_err(|_| {
+    ltp::read_named_properties(
+        &mut store,
+        &nodes
+            .iter()
+            .find(|n| n.nid == ltp::NID_NAME_TO_ID_MAP)
+            .map_err(|e| error(ErrorKind::Io, e.to_string()))?
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|_| {
         error(
             ErrorKind::DamagedSource,
             "The named-property map could not be read.",
@@ -209,7 +247,7 @@ pub(super) fn inspect(path: &Path) -> Result<Inspection, EngineError> {
 pub(crate) fn inspect_nodes(
     path: &Path,
     store: &mut Pst,
-    nodes: &[pstoff_format::ndb::Node],
+    nodes: &crate::nodes::Nodes,
 ) -> Result<Inspection, EngineError> {
     let mut folders = Vec::new();
     let mut flat = BTreeMap::new();
@@ -219,6 +257,7 @@ pub(crate) fn inspect_nodes(
         .iter()
         .filter(|n| n.nid_type() == 2 || n.nid_type() == 3)
     {
+        let node = node.map_err(|e| error(ErrorKind::Io, e.to_string()))?;
         let mut folder = Folder {
             id: FolderRef(node.nid),
             name: String::new(),
@@ -251,8 +290,9 @@ pub(crate) fn inspect_nodes(
             .iter()
             .filter(|n| n.nid_type() == 4 && n.nid_parent == node.nid)
         {
+            let item = item.map_err(|e| error(ErrorKind::Io, e.to_string()))?;
             folder.item_count += 1;
-            match item_properties(store, item) {
+            match item_properties(store, &item) {
                 Ok(pc) => match pc.props.get(&ltp::PID_MESSAGE_SIZE) {
                     Some(ltp::Value::Int(size)) if *size >= 0 => {
                         folder.bytes = folder.bytes.saturating_add(*size as u64)
@@ -271,6 +311,7 @@ pub(crate) fn inspect_nodes(
             .iter()
             .filter(|n| matches!(n.nid_type(), 0x0d..=0x0f) && n.nid & !31 == node.nid & !31)
         {
+            let table = table.map_err(|e| error(ErrorKind::Io, e.to_string()))?;
             if let Err(e) = crate::writer::validate_table(store, table.bid_data, table.bid_sub) {
                 if e.is::<std::io::Error>() {
                     return Err(error(ErrorKind::Io, format!("Table staging failed: {e}")));
@@ -343,4 +384,54 @@ pub(crate) fn inspect_nodes(
         support: Support::Supported,
         folders,
     })
+}
+
+// Conversion needs structural hierarchy validation, not the public display tree.
+// Disk lookups and Floyd's walk retain no folder names or per-folder strings.
+pub(crate) fn validate_hierarchy(
+    nodes: &crate::nodes::Nodes,
+    cancel: &crate::CancelToken,
+) -> Result<(), EngineError> {
+    let parent = |id: u32| -> Result<Option<u32>, EngineError> {
+        let node = nodes
+            .by_id(id)
+            .map_err(|e| error(ErrorKind::Io, e.to_string()))?;
+        Ok(node
+            .filter(|n| matches!(n.nid_type(), 2 | 3))
+            .and_then(|n| {
+                if n.nid == ltp::NID_ROOT_FOLDER && n.nid_parent == n.nid {
+                    None
+                } else {
+                    Some(n.nid_parent)
+                }
+            }))
+    };
+    for node in nodes.iter().filter(|n| matches!(n.nid_type(), 2 | 3)) {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        let node = node.map_err(|e| error(ErrorKind::Io, e.to_string()))?;
+        let mut slow = parent(node.nid)?;
+        let mut fast = match slow {
+            Some(id) => parent(id)?,
+            None => None,
+        };
+        while let (Some(s), Some(f)) = (slow, fast) {
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+            if s == f {
+                return Err(error(
+                    ErrorKind::DamagedSource,
+                    "The folder hierarchy contains a cycle.",
+                ));
+            }
+            slow = parent(s)?;
+            fast = match parent(f)? {
+                Some(id) => parent(id)?,
+                None => None,
+            };
+        }
+    }
+    Ok(())
 }

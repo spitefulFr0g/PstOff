@@ -4,17 +4,16 @@ use super::{
     Result,
 };
 use crate::Difference;
-use pstoff_format::ndb::{Node, Pst};
+use pstoff_format::ndb::Pst;
 pub(super) fn prepare(
     source: &mut Pst,
-    nodes: &[Node],
+    nodes: &crate::nodes::Nodes,
     display: &str,
     system: &super::system::SystemFolders,
     cancel: &crate::CancelToken,
 ) -> Result<(Properties, crate::Records<Difference>)> {
     let node = nodes
-        .iter()
-        .find(|n| n.nid == 0x21)
+        .by_id(0x21)?
         .ok_or("The source has no message store")?;
     let mut cells = context::store_properties(
         source,
