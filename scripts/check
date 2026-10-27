@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Run audit, workspace Rust checks and Python harness tests in Windows Sandbox."""
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
 
-root = Path(__file__).resolve().parent.parent
-raise SystemExit(
-    subprocess.run(
-        [sys.executable, str(root / "scripts" / "sandbox-cargo.py"), "--check"],
-        cwd=root,
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--fast", action="store_true", help="skip only the large process-memory regression")
+    modes.add_argument("--full", action="store_true", help="run every check (the default)")
+    args = parser.parse_args(argv)
+    root = Path(__file__).resolve().parent.parent
+    return subprocess.run(
+        [sys.executable, str(root / "scripts" / "sandbox-cargo.py"),
+         "--check-fast" if args.fast else "--check"], cwd=root,
     ).returncode
-)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

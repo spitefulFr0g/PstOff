@@ -43,6 +43,17 @@ Windows Sandbox as described above.
 
 ## Full local check coverage
 
+Use `python scripts/check --fast` for development feedback: it skips only
+`large_generated_ost_has_fixed_separate_process_peak`. All other workspace,
+GUI example, audit and Python harness checks remain enabled. Use
+`python scripts/check --full` before merge; bare `python scripts/check` is the
+same full route. A fast pass does not establish the memory ceiling.
+
+The wrapper prints the shared-lock wait, log directory, guest stage changes,
+completed exit codes and a 30-second elapsed-time heartbeat. Detailed logs stay
+in the printed directory and are printed at completion. Stage messages contain
+no mail content. A quiet test stage can still be running the long memory corpus.
+
 `scripts/check` uses `fmt --all`, `clippy --workspace --all-targets` and
 `test --workspace`, including the `pstoff-format` crate. It also tests the GUI
 smoke example and runs `unittest discover -s tests -v` **inside the guest**.
