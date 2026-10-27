@@ -6,6 +6,58 @@ applies. No large-store working-set or committed-memory measurement is claimed.
 This document specifies the missing interfaces, resource arithmetic and tests
 needed to turn the earlier streaming/spill proposal into an enforceable bound.
 
+## Implementation checkpoint: issue #32 / story 35
+
+Inspected integration HEAD `922c8ad3ec5746dc82ee2cc59ceb4c23eeb2e577`.
+The checkout was clean; no implementation from the interrupted attempt was
+present. This checkpoint records a blocked implementation, not a completed
+memory slice. Story 35 and issue #32's fixed-ceiling criterion remain open.
+
+The current code still has these concrete owners and call boundaries:
+
+| Boundary | Evidence at inspected HEAD | Required replacement |
+| --- | --- | --- |
+| Initial inspection | `conversion::convert` retains `conversion_source` while calling `reader::inspect(path)`; `reader::item_properties` calls materializing `ltp::read_node_pc`, `read_pc` and `read_tc` | Stream validation on the retained immutable source handle, with bounded indexes and traversal state |
+| Source block lookup | `third-party/pstfree/src/ndb.rs::Pst::block` calls `blocks()` and constructs the complete BBT `HashMap` on first use | Bounded page cache or disk index before any payload cursor can claim a bound |
+| Property decoding | `writer/context.rs::Cell.bytes` is a `Vec<u8>`; `properties` constructs a whole `Heap` and calls `node_blocks(node.data)?.concat()` | Namespace-qualified ranges and a validating chunk cursor; spilling PC descriptors as necessary |
+| Policy planning | `writer/cache.rs::prepare` retains all table observations and inserts every complete Item PC into `planned`; `writer.rs::Output` owns that map | External sort and disk-indexed validated decisions, with shared capacity reservations |
+| Table read/write | `writer/table.rs::Table.rows` owns every row's cells; `Table::build` consumes that materialized representation through a `&[Vec<u8>]` payload callback | Row visitors, streamed payload callbacks and spooled matrix/BTH/alias indexes |
+| Report result | `lib.rs::ConversionReport` returns `files`, `folders`, `skipped` and `differences` as vectors; `conversion.rs` accumulates records | Explicit report API/schema and CLI/GUI migration to paths/counts plus streamed or paged records |
+| Finalization | `writer.rs` drops `Output`, then calls the pinned `UnicodePstFile::open(path)` and `lock()?.flush()` | Validated upstream bounded allocation-map finalization; the existing finalizer growth analysis below still applies |
+| Regression input | `crates/engine/tests/support/synthetic.rs::Store::build` returns the whole file as `Vec<u8>`; `Writer::finish` asserts at most 126 nodes and 169 blocks | Separate file-backed multilevel builder, validated on small cases before large-corpus measurement |
+
+Removing the planned map alone cannot establish even the payload contract:
+inspection precedes planning, a single source value still concatenates in full,
+and one table may contain all Items. A cursor added only at emission would leave
+those allocations intact. Reopening payload paths to simplify descriptors would
+also lose the immutable-handle guarantee and attachment-local namespace identity.
+Changing policy comparisons incrementally without replacing these interfaces
+together risks choosing recovery values before the final conflicting occurrence
+has been validated. No such partial semantic change was made.
+
+Two decisions block a complete whole-process implementation under this note:
+
+1. Approve the report API/schema migration, including CLI/GUI consumers and
+   whether materialized reports remain an explicit opt-in without the bound.
+2. Supply a bounded upstream finalizer API and authorize its dependency revision,
+   or explicitly revise the acceptance contract to a supported size domain with
+   a quantified finalizer bound. This note authorizes neither a dependency
+   replacement nor a weaker contract.
+
+After those decisions, the source readers, planner, writer, metadata/report
+spools, disk-space accounting and isolated regression harness must be delivered
+as the coordinated implementation described below. The 16 MiB reservation
+target and proposed 256 MiB private-commit target are not current guarantees.
+No deterministic memory-ceiling regression was added: the required interfaces
+and file-backed fixture builder do not exist, so a passing small-fixture test
+would not assert the documented contract.
+
+Checkpoint validation: source/call-site inspection and `git diff --check` only.
+No build, Rust test, Sandbox run, memory measurement, mail input, independent
+readback or Faithful check was performed for this documentation-only checkpoint.
+Earlier test results elsewhere in these notes do not validate this checkpoint
+or close the memory blocker.
+
 ## Two distinct acceptance contracts
 
 1. **Payload working memory:** at most 16 MiB of explicitly reserved buffer
