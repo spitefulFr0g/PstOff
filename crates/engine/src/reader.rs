@@ -71,7 +71,7 @@ fn classify(file: &mut File) -> Result<Support, EngineError> {
 pub(crate) fn item_properties(
     store: &mut Pst,
     node: &pstoff_format::ndb::Node,
-) -> Result<ltp::Pc, String> {
+) -> Result<ltp::Pc, Box<dyn std::error::Error>> {
     let pc = ltp::read_node_pc(store, node)?;
     if pc
         .props
@@ -95,7 +95,7 @@ pub(crate) fn item_properties(
                     ltp::read_pc(store, sub.data, sub.sub)?;
                 }
                 0x11 | 0x12 => {
-                    ltp::read_tc(store, sub.data, sub.sub)?;
+                    crate::writer::validate_table(store, sub.data, sub.sub)?;
                 }
                 _ => (),
             }
@@ -239,7 +239,13 @@ pub(super) fn inspect(path: &Path) -> Result<Inspection, EngineError> {
                                     Some("An Item has no readable size property.".into())
                             }
                         },
-                        Err(_) => {
+                        Err(e) => {
+                            if e.is::<std::io::Error>() {
+                                return Err(error(
+                                    ErrorKind::Io,
+                                    format!("Table staging failed: {e}"),
+                                ));
+                            }
                             folder.unreadable = Some("One or more Items could not be read.".into())
                         }
                     }
@@ -249,7 +255,12 @@ pub(super) fn inspect(path: &Path) -> Result<Inspection, EngineError> {
                     .into_iter()
                     .flatten()
                 {
-                    if ltp::read_tc(&mut store, table.bid_data, table.bid_sub).is_err() {
+                    if let Err(e) =
+                        crate::writer::validate_table(&mut store, table.bid_data, table.bid_sub)
+                    {
+                        if e.is::<std::io::Error>() {
+                            return Err(error(ErrorKind::Io, format!("Table staging failed: {e}")));
+                        }
                         folder.unreadable = Some("A folder table could not be read.".into());
                     }
                 }

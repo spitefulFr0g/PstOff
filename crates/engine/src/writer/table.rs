@@ -3,11 +3,12 @@ use super::{
     context::{Cell, HeapBuilder, Properties},
     p16, p32, Result, MAX,
 };
-use crate::{Difference, FolderRef, ItemRef};
-use pstoff_format::{
-    ltp::Heap,
-    ndb::{Node, Pst},
+use super::{
+    spool::Index,
+    table_storage::{Blocks, Heap, Rows},
 };
+use crate::{Difference, FolderRef, ItemRef};
+use pstoff_format::ndb::{Node, Pst};
 use std::collections::{BTreeMap, BTreeSet};
 fn u16at(b: &[u8], at: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(
@@ -26,14 +27,110 @@ pub(super) struct Table {
     pub(super) columns: Vec<(u32, usize)>,
     pub(super) pair_cache: bool,
     pub(super) time_cache: bool,
-    pub(super) rows: Vec<(u32, u32, BTreeMap<u32, Cell>)>,
+    pub(super) rows: Rows,
 }
-pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
-    let blocks = source.node_blocks(bid)?;
+// Inspection historically accepts tables without conversion's required
+// identity/version schema. Keep that public behavior while discarding each
+// validated row instead of calling the format reader's collecting read_tc.
+pub(super) fn inspect(source: &mut Pst, bid: u64, sub: u64) -> Result<()> {
+    let mut blocks = Blocks::new()?;
+    for chunk in source.node_chunks(bid)? {
+        blocks.push(&chunk?)?;
+    }
+    let mut heap = Heap::new(blocks, source.ver)?;
+    if heap.client_sig != 0x7c {
+        return Err("Invalid table heap".into());
+    }
+    let info = heap.item(heap.user_root)?;
+    if info.len() < 22 || info[0] != 0x7c || info.len() < 22 + usize::from(info[1]) * 8 {
+        return Err("Invalid table context".into());
+    }
+    let width = usize::from(u16at(&info, 8)?);
+    let ceb = usize::from(u16at(&info, 6)?);
+    if width < 4 || ceb > width {
+        return Err("Invalid table width".into());
+    }
+    let matrix = u32at(&info, 14)?;
+    let subs = source.subnodes(sub)?;
+    let mut rows = Blocks::new()?;
+    if matrix != 0 {
+        if matrix & 31 == 0 {
+            rows.push(&heap.item(matrix)?)?;
+        } else {
+            let bid = subs.get(&matrix).ok_or("Missing table matrix")?.data;
+            for chunk in source.node_chunks(bid)? {
+                rows.push(&chunk?)?;
+            }
+        }
+    }
+    for block in rows.iter() {
+        for row in block?.chunks_exact(width) {
+            for column in info[22..22 + usize::from(info[1]) * 8].as_chunks::<8>().0 {
+                let kind = u32at(column, 0)? as u16;
+                let at = usize::from(u16at(column, 4)?);
+                let size = usize::from(column[6]);
+                let bit = usize::from(column[7]);
+                // Match read_tc's inline GUID handling; conversion retains its
+                // own stricter schema checks and exact raw cell representation.
+                let variable = variable(kind) && kind != 0x48;
+                let required = match kind {
+                    2 => Some(2),
+                    0xb => Some(1),
+                    3 | 4 | 0xa => Some(4),
+                    5 | 6 | 7 | 0x14 | 0x40 => Some(8),
+                    0x48 => Some(16),
+                    _ => None,
+                };
+                if at + size > ceb
+                    || bit / 8 >= width - ceb
+                    || (variable && size != 4)
+                    || required.is_some_and(|s| s != size)
+                {
+                    return Err("Invalid table cell layout".into());
+                }
+                if variable && row[ceb + bit / 8] & (0x80 >> (bit % 8)) != 0 {
+                    let hnid = u32at(row, at)?;
+                    if hnid & 31 == 0 {
+                        heap.item(hnid)?;
+                    } else if let Some(node) = subs.get(&hnid) {
+                        for chunk in source.node_chunks(node.data)? {
+                            chunk?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+pub(super) fn read(
+    source: &mut Pst,
+    bid: u64,
+    sub: u64,
+    cancel: &crate::CancelToken,
+) -> Result<Table> {
+    let result = read_inner(source, bid, sub, cancel);
+    if cancel.is_cancelled() {
+        return empty(vec![]);
+    }
+    result
+}
+fn read_inner(source: &mut Pst, bid: u64, sub: u64, cancel: &crate::CancelToken) -> Result<Table> {
+    let mut blocks = Blocks::new()?;
+    for chunk in source.node_chunks(bid)? {
+        if cancel.is_cancelled() {
+            return Err("Cancelled table read".into());
+        }
+        blocks.push(&chunk?)?;
+    }
     // Validate all allocation maps before accepting any source-backed cache value.
-    for (i, block) in blocks.iter().enumerate() {
-        let map = u16at(block, 0)? as usize;
-        let count = u16at(block, map)? as usize;
+    for i in 0..blocks.count {
+        if cancel.is_cancelled() {
+            return Err("Cancelled table read".into());
+        }
+        let block = blocks.get(i)?;
+        let map = u16at(&block, 0)? as usize;
+        let count = u16at(&block, map)? as usize;
         let header = if i == 0 {
             12
         } else if i % 128 == 8 {
@@ -46,20 +143,20 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
         }
         let mut previous = header;
         for n in 0..=count {
-            let offset = u16at(block, map + 4 + n * 2)? as usize;
+            let offset = u16at(&block, map + 4 + n * 2)? as usize;
             if offset < previous || offset > map {
                 return Err("Overlapping table heap allocation".into());
             }
             previous = offset;
         }
     }
-    let heap = Heap::new(blocks)?;
+    let mut heap = Heap::new(blocks, source.ver)?;
     let info = heap.item(heap.user_root)?;
     if info.len() < 22 || info[0] != 0x7c {
         return Err("Invalid table context".into());
     }
-    let width = u16at(info, 8)? as usize;
-    let ceb = u16at(info, 6)? as usize;
+    let width = u16at(&info, 8)? as usize;
+    let ceb = u16at(&info, 6)? as usize;
     if width < 8 || ceb > width {
         return Err("Invalid table width".into());
     }
@@ -67,8 +164,8 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
         .map(|i| {
             let at = 22 + i * 8;
             Ok((
-                u32at(info, at)?,
-                u16at(info, at + 4)? as usize,
+                u32at(&info, at)?,
+                u16at(&info, at + 4)? as usize,
                 *info.get(at + 6).ok_or("Truncated column")? as usize,
                 *info.get(at + 7).ok_or("Truncated column")? as usize,
             ))
@@ -76,8 +173,8 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
         .collect::<Result<Vec<_>>>()?;
     if heap.client_sig != 0x7c
         || info.len() != 22 + columns.len() * 8
-        || u16at(info, 2)? > u16at(info, 4)?
-        || u16at(info, 4)? as usize > ceb
+        || u16at(&info, 2)? > u16at(&info, 4)?
+        || u16at(&info, 4)? as usize > ceb
     {
         return Err("Invalid table header boundaries".into());
     }
@@ -115,20 +212,25 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             return Err("Missing table row identity descriptor".into());
         }
     }
-    let mut structural = BTreeSet::from([heap.user_root]);
-    let index_header = u32at(info, 10)?;
-    structural.insert(index_header);
+    let mut structural = Index::new()?;
+    structural.insert(heap.user_root, 0)?;
+    let index_header = u32at(&info, 10)?;
+    structural.insert(index_header, 0)?;
     let bth = heap.item(index_header)?;
     if bth.len() != 8 || bth[..3] != [0xb5, 4, 4] || bth[3] > 32 {
         return Err("Invalid table row index".into());
     }
-    let mut pending = vec![(u32at(bth, 4)?, bth[3])];
-    let mut index = BTreeMap::new();
+    let mut pending = vec![(u32at(&bth, 4)?, bth[3])];
+    let mut index = Index::new()?;
+    let mut index_count = 0u64;
     while let Some((hid, level)) = pending.pop() {
+        if cancel.is_cancelled() {
+            return Err("Cancelled table read".into());
+        }
         if hid == 0 {
             continue;
         }
-        if !structural.insert(hid) {
+        if structural.insert(hid, 0)?.is_some() {
             return Err("Aliased or cyclic table index".into());
         }
         let data = heap.item(hid)?;
@@ -143,32 +245,43 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             }
             previous = Some(key);
             if level == 0 {
-                if index.insert(key, u32at(record, 4)?).is_some() {
+                if index.insert(key, u64::from(u32at(record, 4)?))?.is_some() {
                     return Err("Duplicate table index identity".into());
                 }
+                index_count += 1;
             } else {
                 pending.push((u32at(record, 4)?, level - 1));
             }
         }
     }
-    let matrix = u32at(info, 14)?;
-    structural.insert(matrix);
+    let matrix = u32at(&info, 14)?;
+    structural.insert(matrix, 0)?;
     let subs = source.subnodes(sub)?;
-    let resolve = |source: &mut Pst, hnid: u32| -> Result<Vec<Vec<u8>>> {
-        if hnid == 0 {
-            Ok(vec![])
-        } else if hnid & 31 == 0 {
-            Ok(vec![heap.item(hnid)?.to_vec()])
+    let mut matrix_blocks = Blocks::new()?;
+    if matrix != 0 {
+        if matrix & 31 == 0 {
+            matrix_blocks.push(&heap.item(matrix)?)?;
         } else {
-            Ok(source.node_blocks(subs.get(&hnid).ok_or("Missing table payload")?.data)?)
+            let bid = subs.get(&matrix).ok_or("Missing table payload")?.data;
+            for chunk in source.node_chunks(bid)? {
+                if cancel.is_cancelled() {
+                    return Err("Cancelled table read".into());
+                }
+                matrix_blocks.push(&chunk?)?;
+            }
         }
-    };
-    let mut rows = vec![];
-    let mut seen = BTreeSet::new();
-    for block in resolve(source, u32at(info, 14)?)? {
+    }
+    let mut rows = Rows::new()?;
+    rows.cancel = cancel.clone();
+    let mut seen = Index::new()?;
+    for block in matrix_blocks.iter() {
+        let block = block?;
         for row in block.chunks_exact(width) {
+            if cancel.is_cancelled() {
+                return Err("Cancelled table read".into());
+            }
             let id = u32at(row, 0)?;
-            if !seen.insert(id) || index.get(&id) != Some(&(rows.len() as u32)) {
+            if seen.insert(id, 0)?.is_some() || index.get(id)? != Some(u64::from(rows.count)) {
                 return Err("Table row/index identity mismatch".into());
             }
             let mut cells = BTreeMap::new();
@@ -182,19 +295,22 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
                 let kind = *tag as u16;
                 let bytes = if variable(kind) {
                     let hnid = u32at(row, *at)?;
-                    if matches!(tag >> 16, 0x65e2 | 0x65e3) && structural.contains(&hnid) {
+                    if matches!(tag >> 16, 0x65e2 | 0x65e3) && structural.get(hnid)?.is_some() {
                         return Err("Q15 cell aliases table structure".into());
                     }
                     if hnid == 0 {
                         vec![]
                     } else if hnid & 31 == 0 {
-                        heap.item(hnid)?.to_vec()
+                        heap.item(hnid)?
                     } else {
                         // Policy/table cells still own their value, but do not
                         // also retain every decoded block before concatenation.
                         let bid = subs.get(&hnid).ok_or("Missing table payload")?.data;
                         let mut bytes = Vec::new();
                         for chunk in source.node_chunks(bid)? {
+                            if cancel.is_cancelled() {
+                                return Err("Cancelled table read".into());
+                            }
                             bytes.extend_from_slice(&chunk?);
                         }
                         bytes
@@ -214,10 +330,10 @@ pub(super) fn read(source: &mut Pst, bid: u64, sub: u64) -> Result<Table> {
             if !cells.contains_key(&0x67f20003) || !cells.contains_key(&0x67f30003) {
                 return Err("Absent table row identity".into());
             }
-            rows.push((id, u32at(row, 4)?, cells));
+            rows.push(&(id, u32at(row, 4)?, cells))?;
         }
     }
-    if rows.len() != index.len() {
+    if u64::from(rows.count) != index_count {
         return Err("Table row/index count mismatch".into());
     }
     Ok(Table {
@@ -235,7 +351,7 @@ impl Table {
         nid: u32,
         differences: &mut Vec<Difference>,
     ) -> Result<()> {
-        for (row, _, cells) in &mut self.rows {
+        self.rows.rewrite(|(row, _, cells)| {
             let node = nodes
                 .iter()
                 .find(|n| n.nid == *row)
@@ -276,7 +392,8 @@ impl Table {
                     reason: reason.into(),
                 });
             }
-        }
+            Ok(true)
+        })?;
         // Required contents schema columns have absent cells, never invented defaults.
         for tag in [
             0x0e300102, 0x0e330014, 0x0e340102, 0x0e3d0102, 0x0e3c0102, 0x0e380003,
@@ -289,9 +406,9 @@ impl Table {
         Ok(())
     }
     pub fn build(
-        &self,
+        &mut self,
         heap: &mut HeapBuilder,
-        mut payload: impl FnMut(&[Vec<u8>]) -> Result<u32>,
+        mut payload: impl FnMut(&mut dyn Iterator<Item = Result<Vec<u8>>>) -> Result<u32>,
     ) -> Result<u32> {
         let mut columns = self.columns.clone();
         columns.sort_by_key(|(tag, size)| {
@@ -348,13 +465,15 @@ impl Table {
         if width > MAX {
             return Err("Table row exceeds a PST block".into());
         }
-        let mut matrix = vec![];
+        let mut matrix = Blocks::new()?;
         let mut rows = vec![];
-        let mut index = vec![];
-        for (i, (id, unique, cells)) in self.rows.iter().enumerate() {
+        let mut index = Index::new()?;
+        let count = self.rows.count;
+        let mut ordinal = 0u32;
+        self.rows.visit(|(id, unique, cells)| {
             let mut row = vec![0; width];
-            p32(&mut row, 0, *id);
-            p32(&mut row, 4, *unique);
+            p32(&mut row, 0, id);
+            p32(&mut row, 4, unique);
             for (tag, size) in &columns {
                 let bit = bits[tag];
                 let Some(cell) = cells.get(tag).filter(|c| c.kind == *tag as u16) else {
@@ -363,7 +482,7 @@ impl Table {
                 let at = offsets[tag];
                 if variable(cell.kind) {
                     let hnid = if cell.bytes.len() > 3580 {
-                        payload(std::slice::from_ref(&cell.bytes))?
+                        payload(&mut std::iter::once(Ok(cell.bytes.clone())))?
                     } else {
                         heap.alloc(&cell.bytes)?
                     };
@@ -376,26 +495,80 @@ impl Table {
                 row[ceb + bit / 8] |= 0x80 >> (bit % 8);
             }
             rows.extend_from_slice(&row);
-            index.push((id.to_le_bytes().to_vec(), (i as u32).to_le_bytes().to_vec()));
+            if index.insert(id, u64::from(ordinal))?.is_some() {
+                return Err("Duplicate emitted table identity".into());
+            }
+            ordinal += 1;
             if rows.len() + width > MAX {
-                if i + 1 < self.rows.len() {
+                if ordinal < count {
                     rows.resize(MAX, 0);
                 }
-                matrix.push(std::mem::take(&mut rows));
+                matrix.push(&rows)?;
+                rows.clear();
             }
+            Ok(())
+        })?;
+        if self.rows.cancel.is_cancelled() {
+            return Ok(0);
         }
         if !rows.is_empty() {
-            matrix.push(rows)
+            matrix.push(&rows)?;
         }
-        let matrix_hnid = if matrix.len() == 1 && matrix[0].len() <= 3580 {
-            heap.alloc(&matrix[0])?
-        } else if matrix.is_empty() {
+        let matrix_hnid = if matrix.count == 1 && matrix.get(0)?.len() <= 3580 {
+            heap.alloc(&matrix.get(0)?)?
+        } else if matrix.count == 0 {
             0
         } else {
-            payload(&matrix)?
+            payload(&mut matrix.iter())?
         };
-        index.sort_by_key(|e| u32::from_le_bytes(e.0[..4].try_into().unwrap()));
-        let row_index = heap.bth(&index, 4, 4)?;
+        let mut records = Blocks::new()?;
+        let mut block = Vec::with_capacity(3496);
+        index.visit(&self.rows.cancel, |id, ordinal| {
+            block.extend_from_slice(&id.to_le_bytes());
+            block.extend_from_slice(&u32::try_from(ordinal)?.to_le_bytes());
+            if block.len() == 3496 {
+                records.push(&block)?;
+                block.clear();
+            }
+            Ok(())
+        })?;
+        if !block.is_empty() {
+            records.push(&block)?;
+        }
+        let mut level = 0u8;
+        let root = loop {
+            if records.count == 0 {
+                break 0;
+            }
+            let mut parents = Blocks::new()?;
+            let mut group = Vec::with_capacity(3496);
+            let mut only = 0;
+            for bytes in records.iter() {
+                if self.rows.cancel.is_cancelled() {
+                    return Ok(0);
+                }
+                let bytes = bytes?;
+                let hid = heap.alloc(&bytes)?;
+                only = hid;
+                group.extend_from_slice(&bytes[..4]);
+                group.extend_from_slice(&hid.to_le_bytes());
+                if group.len() == 3496 {
+                    parents.push(&group)?;
+                    group.clear();
+                }
+            }
+            if records.count == 1 {
+                break only;
+            }
+            if !group.is_empty() {
+                parents.push(&group)?;
+            }
+            records = parents;
+            level = level.checked_add(1).ok_or("Table BTH depth overflow")?;
+        };
+        let mut bth = [0xb5, 4, 4, level, 0, 0, 0, 0];
+        p32(&mut bth, 4, root);
+        let row_index = heap.alloc(&bth)?;
         let mut info = vec![0; 22 + columns.len() * 8];
         info[0] = 0x7c;
         info[1] = columns.len() as u8;
@@ -415,20 +588,20 @@ impl Table {
     }
 }
 
-pub(super) fn empty(rows: Vec<u32>) -> Table {
+pub(super) fn empty(rows: Vec<u32>) -> Result<Table> {
     let mut table = Table {
         columns: vec![(0x67f20003, 4), (0x67f30003, 4)],
         pair_cache: false,
         time_cache: false,
-        rows: vec![],
+        rows: Rows::new()?,
     };
     for id in rows {
-        table.add_identity_row(id);
+        table.add_identity_row(id)?;
     }
-    table
+    Ok(table)
 }
 impl Table {
-    pub(super) fn add_identity_row(&mut self, id: u32) {
+    pub(super) fn add_identity_row(&mut self, id: u32) -> Result<()> {
         let cells = [(0x67f20003, id), (0x67f30003, 1)]
             .into_iter()
             .map(|(tag, value)| {
@@ -442,6 +615,6 @@ impl Table {
                 )
             })
             .collect();
-        self.rows.push((id, 1, cells));
+        self.rows.push(&(id, 1, cells))
     }
 }

@@ -1,10 +1,12 @@
 use super::*;
 use std::io::Read;
+mod allocations;
 #[path = "../../tests/support/mod.rs"]
 mod support;
 #[allow(dead_code)]
 #[path = "../../tests/support/synthetic.rs"]
 mod synthetic;
+mod tables;
 
 #[test]
 fn source_payload_relocation_is_selective_ordered_and_cancellable() {

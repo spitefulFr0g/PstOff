@@ -4,9 +4,11 @@ mod recovery;
 pub(super) use recovery::prepare as recover;
 pub(crate) use recovery::Recovery;
 mod context;
+mod spool;
 mod store;
 mod system;
 mod table;
+mod table_storage;
 #[cfg(test)]
 mod tests;
 use outlook_pst::{PstFile, UnicodePstFile};
@@ -45,6 +47,9 @@ impl Drop for Partial<'_> {
     }
 }
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub(super) fn validate_table(source: &mut Pst, bid: u64, sub: u64) -> Result<()> {
+    table::inspect(source, bid, sub)
+}
 struct Output {
     cancel: crate::CancelToken,
     file: File,
@@ -126,31 +131,6 @@ impl Output {
         self.blocks.push((id, entry));
         Ok(id)
     }
-    fn stream(&mut self, blocks: &[Vec<u8>]) -> Result<u64> {
-        let mut parts = Vec::new();
-        for block in blocks {
-            for b in block.chunks(MAX) {
-                parts.push((self.block(b, false)?, b.len() as u64));
-            }
-        }
-        if parts.is_empty() {
-            return Ok(0);
-        }
-        if parts.len() == 1 {
-            return Ok(parts[0].0);
-        }
-        if parts.len() > 1021 * 1021 {
-            return Err("PST stream exceeds two XBLOCK levels".into());
-        }
-        if parts.len() <= 1021 {
-            return self.array(&parts, 1);
-        }
-        let mut parents = Vec::new();
-        for group in parts.chunks(1021) {
-            parents.push((self.array(group, 1)?, group.iter().map(|p| p.1).sum()));
-        }
-        self.array(&parents, 2)
-    }
     fn array(&mut self, parts: &[(u64, u64)], level: u8) -> Result<u64> {
         let mut b = vec![0; 8 + parts.len() * 8];
         b[0] = 1;
@@ -167,17 +147,30 @@ impl Output {
     }
     // Keep only one data buffer and one bounded group per XBLOCK level.
     fn source_stream(&mut self, source: &mut Pst, bid: u64, heap: bool) -> Result<u64> {
+        self.stream_chunks(
+            &mut source.node_chunks(bid)?.map(|b| {
+                let bytes = b?;
+                if heap && bytes.len() > MAX {
+                    return Err("Oversized table heap requires rebuilding".into());
+                }
+                Ok(bytes)
+            }),
+            heap,
+        )
+    }
+    fn stream_chunks(
+        &mut self,
+        chunks: &mut dyn Iterator<Item = Result<Vec<u8>>>,
+        heap: bool,
+    ) -> Result<u64> {
         let mut leaves = Vec::with_capacity(1021);
         let mut parents = Vec::with_capacity(1021);
         let mut buffer = Vec::with_capacity(MAX);
-        for chunk in source.node_chunks(bid)? {
+        for chunk in chunks {
             if self.cancel.is_cancelled() {
                 return Ok(0);
             }
             let chunk = chunk?;
-            if heap && chunk.len() > MAX {
-                return Err("Oversized table heap requires rebuilding".into());
-            }
             let mut rest = chunk.as_slice();
             while !rest.is_empty() {
                 let take = rest.len().min(MAX - buffer.len());
@@ -302,7 +295,7 @@ impl Output {
             let mut table = if is_pc {
                 None
             } else {
-                Some(table::read(source, bid, sub)?)
+                Some(table::read(source, bid, sub, &self.cancel)?)
             };
             if self.cancel.is_cancelled() {
                 return Ok((0, 0));
@@ -311,7 +304,9 @@ impl Output {
                 // Omitted references are global NIDs. Nested recipient/attachment
                 // table row IDs live in local namespaces and must remain untouched.
                 if matches!(nid & 31, 0xd..=0x10) {
-                    table.rows.retain(|(row, _, _)| !self.omitted.contains(row));
+                    table
+                        .rows
+                        .rewrite(|(row, _, _)| Ok(!self.omitted.contains(row)))?;
                 }
                 if nid & 31 == 0xd {
                     for n in self.nodes.iter().filter(|n| {
@@ -319,11 +314,11 @@ impl Output {
                             && n.nid != (nid & !31 | 2)
                             && n.nid_parent == (nid & !31 | 2)
                     }) {
-                        table.add_identity_row(n.nid);
+                        table.add_identity_row(n.nid)?;
                     }
                     // Hierarchy rows cache child counts. Keep those caches in
                     // agreement with the selected folder property contexts.
-                    for (folder, _, cells) in &mut table.rows {
+                    table.rows.rewrite(|(folder, _, cells)| {
                         for (tag, cell) in cells.iter_mut() {
                             let value = match tag >> 16 {
                                 0x3602 | 0x3617 => {
@@ -361,7 +356,8 @@ impl Output {
                                 }
                             }
                         }
-                    }
+                        Ok(true)
+                    })?;
                 }
             }
             if matches!(nid & 31, 0x0e..=0x10) {
@@ -381,26 +377,28 @@ impl Output {
                 let (data, below) = self.context(source, s.data, s.sub, depth + 1)?;
                 entries.push((nid, data, below));
             }
-            let mut heap = context::HeapBuilder::new(if is_pc { 0xbc } else { 0x7c });
-            let mut payload = |blocks: &[Vec<u8>]| -> Result<u32> {
+            let mut heap = context::HeapBuilder::new(if is_pc { 0xbc } else { 0x7c })?;
+            let mut payload = |blocks: &mut dyn Iterator<Item = Result<Vec<u8>>>| -> Result<u32> {
                 if next > 0x07ffffff {
                     return Err("Subnode ID overflow".into());
                 }
                 let nid = (next << 5) | 0x1f;
                 next += 1;
                 self.highwater = self.highwater.max(next);
-                let data = self.stream(blocks)?;
+                let data = self.stream_chunks(blocks, true)?;
                 entries.push((nid, data, 0));
                 Ok(nid)
             };
             let root = if let Some(cells) = cells {
-                context::pc(&cells, &mut heap, |bytes| payload(&[bytes.to_vec()]))?
+                context::pc(&cells, &mut heap, |bytes| {
+                    payload(&mut std::iter::once(Ok(bytes.to_vec())))
+                })?
             } else {
                 table.unwrap().build(&mut heap, &mut payload)?
             };
             entries.sort_by_key(|s| s.0);
             let below = self.subentries(&entries)?;
-            let data = self.stream(&heap.finish(root))?;
+            let data = self.stream_chunks(&mut heap.finish(root, &self.cancel)?.iter(), true)?;
             Ok((data, below))
         } else {
             let heap = first.as_ref().is_some_and(|b| b.get(2) == Some(&0xec));
@@ -488,7 +486,11 @@ pub(super) fn write(
     let Some(planned) =
         cache::prepare(source, nodes, &mut differences, cancel, omitted).map_err(|error| {
             crate::EngineError {
-                kind: crate::ErrorKind::DamagedSource,
+                kind: if error.is::<std::io::Error>() {
+                    crate::ErrorKind::Io
+                } else {
+                    crate::ErrorKind::DamagedSource
+                },
                 message: format!("Source cache planning failed: {error}"),
                 completed_files: vec![],
             }
@@ -572,7 +574,7 @@ pub(super) fn write(
         let generated_table = matches!(node.nid_type(), 0xd..=0xf)
             && recovery.created.keys().any(|id| id & !31 == node.nid & !31);
         let (data, sub) = if recovery.created.contains_key(&node.nid) || generated_table {
-            let mut heap = context::HeapBuilder::new(if generated_table { 0x7c } else { 0xbc });
+            let mut heap = context::HeapBuilder::new(if generated_table { 0x7c } else { 0xbc })?;
             let root = if generated_table {
                 let rows = if node.nid_type() == 0xd {
                     nodes
@@ -587,7 +589,7 @@ pub(super) fn write(
                 } else {
                     vec![]
                 };
-                table::empty(rows).build(&mut heap, |_| {
+                table::empty(rows)?.build(&mut heap, |_| {
                     Err("Unexpected generated table payload".into())
                 })?
             } else {
@@ -598,7 +600,10 @@ pub(super) fn write(
                     Err("Unexpected generated folder payload".into())
                 })?
             };
-            (out.stream(&heap.finish(root))?, 0)
+            (
+                out.stream_chunks(&mut heap.finish(root, cancel)?.iter(), true)?,
+                0,
+            )
         } else {
             out.context_with_cells(
                 source,

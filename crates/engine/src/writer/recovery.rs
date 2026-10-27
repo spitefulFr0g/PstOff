@@ -47,7 +47,7 @@ fn validate(
                 context::relocation_properties(source, data, sub, cancel)?;
             }
             0x7c => {
-                table::read(source, data, sub)?;
+                table::read(source, data, sub, cancel)?;
             }
             _ => return Err("Invalid context".into()),
         }
@@ -89,6 +89,13 @@ fn evidence(references: Vec<ItemRef>, unchecked: &[ItemRef]) -> Evidence {
     }
 }
 
+fn readable<T>(result: Result<T>) -> Result<bool> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(e) if e.is::<std::io::Error>() => Err(e),
+        Err(_) => Ok(false),
+    }
+}
 pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) -> Result<Recovery> {
     let identity = system::resolve(source, nodes)?;
     let names = ltp::read_named_properties(source, nodes)?;
@@ -107,19 +114,27 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
         if cancel.is_cancelled() {
             break;
         }
-        let bad = validate(
+        let mut bad = !readable(validate(
             source,
             folder.bid_data,
             folder.bid_sub,
             0,
             Some(0xbc),
             cancel,
-        )
-        .is_err()
-            || nodes
-                .iter()
-                .filter(|n| matches!(n.nid_type(), 0xd..=0xf) && n.nid & !31 == folder.nid & !31)
-                .any(|n| validate(source, n.bid_data, n.bid_sub, 0, Some(0x7c), cancel).is_err());
+        ))?;
+        for n in nodes
+            .iter()
+            .filter(|n| matches!(n.nid_type(), 0xd..=0xf) && n.nid & !31 == folder.nid & !31)
+        {
+            bad |= !readable(validate(
+                source,
+                n.bid_data,
+                n.bid_sub,
+                0,
+                Some(0x7c),
+                cancel,
+            ))?;
+        }
         if bad {
             bad_folders.insert(folder.nid);
         }
@@ -167,8 +182,15 @@ pub(crate) fn prepare(source: &mut Pst, nodes: &[Node], cancel: &CancelToken) ->
         let item = reference(n);
         let ancestor = lost.contains(&n.nid_parent);
         if ancestor
-            || crate::reader::item_properties(source, n).is_err()
-            || validate(source, n.bid_data, n.bid_sub, 0, Some(0xbc), cancel).is_err()
+            || !readable(crate::reader::item_properties(source, n))?
+            || !readable(validate(
+                source,
+                n.bid_data,
+                n.bid_sub,
+                0,
+                Some(0xbc),
+                cancel,
+            ))?
         {
             omitted.insert(n.nid);
             unreadable.push(item.clone());

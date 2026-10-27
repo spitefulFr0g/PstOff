@@ -123,17 +123,38 @@ fn read_properties(
 }
 
 pub(super) struct HeapBuilder {
-    pages: Vec<Vec<u8>>,
-    offsets: Vec<Vec<u16>>,
+    pages: super::table_storage::Blocks,
+    page: Vec<u8>,
+    offsets: Vec<u16>,
     kind: u8,
 }
 impl HeapBuilder {
-    pub fn new(kind: u8) -> Self {
-        Self {
-            pages: vec![vec![0; 12]],
-            offsets: vec![vec![]],
+    pub fn new(kind: u8) -> Result<Self> {
+        Ok(Self {
+            pages: super::table_storage::Blocks::new()?,
+            page: vec![0; 12],
+            offsets: vec![],
             kind,
+        })
+    }
+    fn flush(&mut self) -> Result<()> {
+        let end = self.page.len();
+        if !end.is_multiple_of(2) {
+            self.page.push(0);
         }
+        let map = self.page.len();
+        self.page
+            .extend_from_slice(&(self.offsets.len() as u16).to_le_bytes());
+        self.page.extend_from_slice(&[0, 0]);
+        for offset in &self.offsets {
+            self.page.extend_from_slice(&offset.to_le_bytes());
+        }
+        self.page.extend_from_slice(&(end as u16).to_le_bytes());
+        p16(&mut self.page, 0, map as u16);
+        self.pages.push(&self.page)?;
+        self.page.clear();
+        self.offsets.clear();
+        Ok(())
     }
     pub fn alloc(&mut self, value: &[u8]) -> Result<u32> {
         if value.is_empty() {
@@ -142,21 +163,19 @@ impl HeapBuilder {
         if value.len() > 3580 {
             return Err("Heap allocation requires a payload subnode".into());
         }
-        let mut i = self.pages.len() - 1;
-        if self.pages[i].len() + value.len() + 6 + (self.offsets[i].len() + 1) * 2 > MAX
-            || self.offsets[i].len() >= 2047
+        if self.page.len() + value.len() + 6 + (self.offsets.len() + 1) * 2 > MAX
+            || self.offsets.len() >= 2047
         {
-            i += 1;
-            if i > 65535 {
+            self.flush()?;
+            if self.pages.count > 65535 {
                 return Err("Heap page index overflow".into());
             }
-            let header = if i % 128 == 8 { 66 } else { 2 };
-            self.pages.push(vec![0; header]);
-            self.offsets.push(vec![]);
+            let header = if self.pages.count % 128 == 8 { 66 } else { 2 };
+            self.page.resize(header, 0);
         }
-        self.offsets[i].push(self.pages[i].len() as u16);
-        self.pages[i].extend_from_slice(value);
-        Ok((i as u32) << 16 | (self.offsets[i].len() as u32) << 5)
+        self.offsets.push(self.page.len() as u16);
+        self.page.extend_from_slice(value);
+        Ok(self.pages.count << 16 | (self.offsets.len() as u32) << 5)
     }
     pub fn bth(&mut self, records: &[(Vec<u8>, Vec<u8>)], key: usize, value: usize) -> Result<u32> {
         let mut level = 0;
@@ -187,25 +206,17 @@ impl HeapBuilder {
         p32(&mut h, 4, root);
         self.alloc(&h)
     }
-    pub fn finish(mut self, root: u32) -> Vec<Vec<u8>> {
-        for (i, page) in self.pages.iter_mut().enumerate() {
-            let end = page.len();
-            if !end.is_multiple_of(2) {
-                page.push(0);
+    pub fn finish(
+        mut self,
+        root: u32,
+        cancel: &crate::CancelToken,
+    ) -> Result<super::table_storage::Blocks> {
+        self.flush()?;
+        for i in 0..self.pages.count {
+            if cancel.is_cancelled() {
+                return Ok(self.pages);
             }
-            let map = page.len();
-            let count = self.offsets[i].len();
-            self.offsets[i].push(end as u16);
-            page.extend_from_slice(&(count as u16).to_le_bytes());
-            page.extend_from_slice(&[0, 0]);
-            for offset in &self.offsets[i] {
-                page.extend_from_slice(&offset.to_le_bytes());
-            }
-            p16(page, 0, map as u16);
-        }
-        // Fill-level arrays cover the first eight pages, then groups of 128.
-        let free: Vec<_> = self.pages.iter().map(|p| MAX - p.len()).collect();
-        for (i, &bytes) in free.iter().enumerate() {
+            let bytes = MAX - self.pages.get(i)?.len();
             let level = match bytes {
                 3584.. => 0,
                 2560.. => 1,
@@ -229,18 +240,20 @@ impl HeapBuilder {
             } else {
                 (8 + (i - 8) / 128 * 128, (i - 8) % 128, 2)
             };
-            self.pages[owner][offset + index / 2] |= level << ((index % 2) * 4);
+            let at = offset + index / 2;
+            let page = self.pages.get(owner)?;
+            self.pages.patch(
+                owner,
+                u64::from(at),
+                &[page[at as usize] | level << ((index % 2) * 4)],
+            )?;
         }
-        let count = self.pages.len();
-        for page in &mut self.pages[..count - 1] {
-            page.resize(MAX, 0);
-        }
-        self.pages[0][2] = 0xec;
-        self.pages[0][3] = self.kind;
-        p32(&mut self.pages[0], 4, root);
-        self.pages
+        self.pages.patch(0, 2, &[0xec, self.kind])?;
+        self.pages.patch(0, 4, &root.to_le_bytes())?;
+        Ok(self.pages)
     }
 }
+
 pub(super) fn pc(
     cells: &Properties,
     heap: &mut HeapBuilder,

@@ -24,11 +24,11 @@ pub(super) fn prepare(
         if cancel.is_cancelled() {
             return Ok(None);
         }
-        let table = table::read(source, node.bid_data, node.bid_sub)?;
+        let mut table = table::read(source, node.bid_data, node.bid_sub, cancel)?;
         required.extend(table.columns.iter().map(|c| c.0));
-        for (nid, _, cells) in table.rows {
+        table.rows.visit(|(nid, _, cells)| {
             if omitted.contains(&nid) {
-                continue;
+                return Ok(());
             }
             let item = nodes
                 .iter()
@@ -43,10 +43,12 @@ pub(super) fn prepare(
                 table.time_cache,
                 cells
                     .into_iter()
+                    .filter(|(tag, _)| matches!(tag >> 16, 0x3008 | 0x65e2 | 0x65e3))
                     .map(|(tag, cell)| ((tag >> 16) as u16, cell))
                     .collect(),
             ));
-        }
+            Ok(())
+        })?;
     }
     for node in nodes.iter().filter(|n| matches!(n.nid & 31, 4 | 8)) {
         if cancel.is_cancelled() {

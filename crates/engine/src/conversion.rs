@@ -41,7 +41,11 @@ pub(super) fn convert(
     let excluded = planner::excluded(&nodes, &options.exclusions)?;
     let recovery = writer::recover(&mut source, &nodes, cancel).map_err(|error| {
         failure(
-            ErrorKind::DamagedSource,
+            if error.is::<std::io::Error>() {
+                ErrorKind::Io
+            } else {
+                ErrorKind::DamagedSource
+            },
             format!("Source recovery planning failed: {error}"),
         )
     })?;
@@ -275,7 +279,9 @@ fn folder_mapping(
             .filter(|n| n.nid_parent == folder.nid && matches!(n.nid_type(), 4 | 8))
         {
             count += 1;
-            if let Ok(pc) = reader::item_properties(source, item) {
+            // Recovery already validated nested contexts. Report mapping needs
+            // only this Item's size, so do not stage its tables again here.
+            if let Ok(pc) = pstoff_format::ltp::read_node_pc(source, item) {
                 if let Some(pstoff_format::ltp::Value::Int(size)) = pc.props.get(&0x0e08) {
                     bytes = bytes.saturating_add((*size).max(0) as u64);
                 }
