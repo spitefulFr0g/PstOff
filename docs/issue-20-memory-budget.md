@@ -6,6 +6,11 @@ applies. No large-store working-set or committed-memory measurement is claimed.
 This document specifies the missing interfaces, resource arithmetic and tests
 needed to turn the earlier streaming/spill proposal into an enforceable bound.
 
+Implementation update: strict, non-adopted source BBT lookups now walk the
+on-disk index without a full block map; see [the implementation slice and its
+limits](issue-32-index-progress.md). The inventory below describes the original
+base. The remaining owners and both acceptance contracts are still outstanding.
+
 ## Two distinct acceptance contracts
 
 1. **Payload working memory:** at most 16 MiB of explicitly reserved buffer

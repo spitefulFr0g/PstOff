@@ -32,6 +32,12 @@ package is based on upstream pstfree commit
 reader validation and v36 heap decoding. The upstream MIT notice is retained;
 the local changes are tracked in this repository.
 
+The local strict NDB reader also validates and seeks through the source BBT
+without materializing its block map. `src/ndb/index.rs` is a PstOff adaptation,
+not code from a newer upstream revision. Permissive reading and explicitly
+adopted recovery indexes retain their existing map implementation. The base
+revision, license, Microsoft dependency and finalizer remain unchanged.
+
 The tracer writer reuses the repository's `ticket/20-writer` implementation
 at `49aa687`, including store policy and rebuilt PC/TC contexts. It does not
 inherit that branch's validation claims. The engine enables the existing

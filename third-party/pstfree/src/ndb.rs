@@ -12,6 +12,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
+mod index;
+
 /// `!BDN` at offset 0. Every PST and OST starts with it.
 const MAGIC: u32 = 0x4E44_4221;
 /// `SM` at offset 8 for a PST, `SO` for an OST. Same container either way.
@@ -377,8 +379,10 @@ pub struct Pst {
     pub actual_len: u64,
     pub nbt_root: Bref,
     pub bbt_root: Bref,
-    /// bid -> where its bytes are. Built on first use; the block B-tree is walked once.
+    /// Legacy permissive/recovered index. Strict source reads use the on-disk BBT.
     bbt: Option<HashMap<u64, Block>>,
+    /// Strict readers validate once, then seek through the immutable on-disk BBT.
+    bbt_validated: bool,
     /// Everything survivable that looked wrong on the way through. This is the seed of
     /// the damage report — the thing the paid tools replace with a progress bar.
     pub warnings: Vec<String>,
@@ -556,6 +560,7 @@ impl Pst {
             nbt_root: page.bref(&h, off_nbt),
             bbt_root: page.bref(&h, off_bbt),
             bbt: None,
+            bbt_validated: false,
             strict,
             suppressed: warnings.len(),
             warnings,
@@ -746,25 +751,29 @@ impl Pst {
     /// other block ids — are stored in the clear, which is how a file with a "password"
     /// can be navigated without one.
     pub fn block(&mut self, bid: u64) -> Result<Vec<u8>, String> {
-        if self.bbt.is_none() {
-            let blocks = self.blocks();
-            if self.strict && !self.warnings.is_empty() {
-                return Err("The block index failed integrity checks".into());
-            }
-            let mut map = HashMap::new();
-            for block in blocks {
-                if map.insert(block.bid & !1, block).is_some() && self.strict {
-                    return Err("Duplicate block id in the block index".into());
+        let b = if self.strict && self.bbt.is_none() {
+            self.indexed_block(bid)?
+        } else {
+            if self.bbt.is_none() {
+                let blocks = self.blocks();
+                if self.strict && !self.warnings.is_empty() {
+                    return Err("The block index failed integrity checks".into());
                 }
+                let mut map = HashMap::new();
+                for block in blocks {
+                    if map.insert(block.bid & !1, block).is_some() && self.strict {
+                        return Err("Duplicate block id in the block index".into());
+                    }
+                }
+                self.bbt = Some(map);
             }
-            self.bbt = Some(map);
-        }
-        let b = *self
-            .bbt
-            .as_ref()
-            .unwrap()
-            .get(&(bid & !1))
-            .ok_or_else(|| format!("block {bid} is not in the block index"))?;
+            *self
+                .bbt
+                .as_ref()
+                .unwrap()
+                .get(&(bid & !1))
+                .ok_or_else(|| format!("block {bid} is not in the block index"))?
+        };
 
         // A block is its data, then padding, then the trailer, the whole thing rounded up
         // to the format's block alignment.
